@@ -166,13 +166,6 @@ fun MainMenuLobbyScreen(
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                "MASALIK · NATIVE ANDROID 3D · 100% OFFLINE",
-                color = MasalikAmber,
-                fontFamily = JetBrainsMonoFontFamily,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
                 "مَسَالِك",
                 style = MaterialTheme.typography.displayLarge,
                 color = MasalikIvory
@@ -183,6 +176,24 @@ fun MainMenuLobbyScreen(
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )
+            Spacer(Modifier.height(8.dp))
+
+            Button(
+                onClick = onStartDriving,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("start_driving_button"),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MasalikAmber, contentColor = MasalikObsidian)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("انطلق للقيادة الآن", fontWeight = FontWeight.Black, fontSize = 15.sp)
+            }
+
+            Spacer(Modifier.height(8.dp))
+
             Spacer(Modifier.height(6.dp))
             Text(
                 "محاكاة قيادة واقعية عبر 22 كم من تعز ونقيل سمارة وإب وصنعاء القديمة ومأرب وعدن وشبام — بشوارع حقيقية وسكان ومرور ذكي.",
@@ -215,22 +226,6 @@ fun MainMenuLobbyScreen(
             }
 
             Spacer(Modifier.height(10.dp))
-
-            Button(
-                onClick = onStartDriving,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-                    .testTag("start_driving_button"),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MasalikAmber, contentColor = MasalikObsidian)
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("انطلق للقيادة الآن", fontWeight = FontWeight.Black, fontSize = 15.sp)
-            }
-
-            Spacer(Modifier.height(8.dp))
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LobbyNavCard(
@@ -304,7 +299,6 @@ fun MainMenuLobbyScreen(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text("برمجة وتطوير معتز العلقمي – تعز – اليمن – 2026م", color = MasalikMuted, fontSize = 10.sp)
-            Text("OPENGLES 3.0 · ROOM SQLITE · 100% OFFLINE", color = MasalikMuted, fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp)
         }
     }
 }
