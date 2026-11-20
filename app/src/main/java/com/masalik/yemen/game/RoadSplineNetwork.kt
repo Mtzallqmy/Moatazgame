@@ -331,6 +331,28 @@ object RoadSplineNetwork {
             ys[i] = y
         }
 
+        // Blend adjacent elevation profiles over 120 m so region boundaries
+        // don't introduce ramps that are steeper than the physics model.
+        for (region in REGIONS.drop(1)) {
+            val center = (region.startM / SAMPLE_STEP_M).toInt()
+            val first = center - 12
+            val last = center + 12
+            val span = (last - first).toFloat()
+            val startY = ys[first]
+            val endY = ys[last]
+            val startSlope = (ys[first] - ys[first - 1]) * span
+            val endSlope = (ys[last + 1] - ys[last]) * span
+            for (i in first + 1 until last) {
+                val t = (i - first) / span
+                val t2 = t * t
+                val t3 = t2 * t
+                ys[i] = (2f * t3 - 3f * t2 + 1f) * startY +
+                    (t3 - 2f * t2 + t) * startSlope +
+                    (-2f * t3 + 3f * t2) * endY +
+                    (t3 - t2) * endSlope
+            }
+        }
+
         return Array(count) { i ->
             val d = i * SAMPLE_STEP_M
             val nextIdx = (i + 1).coerceAtMost(count - 1)

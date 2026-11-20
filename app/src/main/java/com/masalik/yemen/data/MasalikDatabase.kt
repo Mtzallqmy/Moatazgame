@@ -32,7 +32,7 @@ abstract class MasalikDatabase : RoomDatabase() {
                     context.applicationContext,
                     MasalikDatabase::class.java,
                     DB_NAME
-                ).fallbackToDestructiveMigration(dropAllTables = true).build().also { INSTANCE = it }
+                ).build().also { INSTANCE = it }
             }
         }
     }

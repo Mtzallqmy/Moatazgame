@@ -138,6 +138,7 @@ object MissionsCatalog {
                     hasAiRival = isBossRace,
                     aiRivalSpeedMs = 16.5f + chapId * 1.1f,
                     cargoRequiredPct = if (isCargo) 75 else 0,
+                    requiresServiceStops = idx == 12 || idx == 16,
                     dialogueBriefAr = "${STORY_CHAPTERS[chapId - 1].narratorNameAr}: «$title — اثبت مهارتك في دروب اليمن!»"
                 )
             )

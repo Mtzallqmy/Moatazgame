@@ -5,44 +5,37 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+val releaseKeystore = providers.environmentVariable("MASALIK_KEYSTORE")
+val releaseStorePassword = providers.environmentVariable("MASALIK_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("MASALIK_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("MASALIK_KEY_PASSWORD")
+
 android {
     namespace = "com.masalik.yemen"
     compileSdk = 36
 
     defaultConfig {
         applicationId = "com.masalik.yemen"
-        minSdk = 26
+        minSdk = 28
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0.0"
+        versionCode = 3
+        versionName = "2.1.0"
     }
 
-    signingConfigs {
-        create("debugConfig") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-        create("release") {
-            storeFile = file("${rootDir}/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+    if (releaseKeystore.isPresent) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseKeystore.get())
+            storePassword = releaseStorePassword.get()
+            keyAlias = releaseKeyAlias.get()
+            keyPassword = releaseKeyPassword.get()
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-        debug {
-            signingConfig = signingConfigs.getByName("debugConfig")
+            signingConfig = signingConfigs.findByName("release")
+            ndk.abiFilters.add("arm64-v8a")
         }
     }
 
@@ -73,4 +66,5 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.kotlinx.serialization.json)
+    testImplementation(libs.junit)
 }

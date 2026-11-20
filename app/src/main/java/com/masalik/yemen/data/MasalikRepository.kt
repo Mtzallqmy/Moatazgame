@@ -1,6 +1,7 @@
 package com.masalik.yemen.data
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.masalik.yemen.game.AudioMixerSettings
 import com.masalik.yemen.game.DamageState
 import com.masalik.yemen.game.DrivingRealismMode
@@ -9,6 +10,7 @@ import com.masalik.yemen.game.GraphicsQuality
 import com.masalik.yemen.game.HudCustomizationSettings
 import com.masalik.yemen.game.PhoneDatabaseStats
 import com.masalik.yemen.game.RadioPlayerSettings
+import com.masalik.yemen.game.RoadSplineNetwork
 import com.masalik.yemen.game.RegionId
 import com.masalik.yemen.game.SaveGameSchema
 import com.masalik.yemen.game.TimeOfDayPreset
@@ -22,12 +24,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import java.time.Instant
 
 class MasalikRepository(
     private val context: Context,
-    private val dao: MasalikDao
+    private val database: MasalikDatabase
 ) {
+    private val dao = database.masalikDao()
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -125,7 +129,17 @@ class MasalikRepository(
         )
     }
 
-    suspend fun persistSaveGame(save: SaveGameSchema) = withContext(Dispatchers.IO) {
+    suspend fun persistSaveGame(
+        save: SaveGameSchema,
+        replaceMissionRecords: Boolean = false,
+        clearTrips: Boolean = false
+    ) = database.withTransaction {
+        if (replaceMissionRecords) dao.clearMissions()
+        if (clearTrips) dao.clearTripLogs()
+        writeSnapshot(save)
+    }
+
+    private suspend fun writeSnapshot(save: SaveGameSchema) {
         val nowIso = Instant.now().toString()
         dao.upsertProfile(
             PlayerProfileEntity(
@@ -205,18 +219,6 @@ class MasalikRepository(
         )
     }
 
-    suspend fun resetAllData(): SaveGameSchema = withContext(Dispatchers.IO) {
-        dao.clearProfile()
-        dao.clearGarage()
-        dao.clearMissions()
-        dao.clearHudSettings()
-        dao.clearRadioPrefs()
-        dao.clearTripLogs()
-        val fresh = SaveGameSchema(timestampIso = Instant.now().toString())
-        persistSaveGame(fresh)
-        fresh
-    }
-
     suspend fun getDatabaseStats(currentSave: SaveGameSchema): PhoneDatabaseStats = withContext(Dispatchers.IO) {
         val dbFile = context.getDatabasePath(MasalikDatabase.DB_NAME)
         val sizeKb = if (dbFile.exists()) (dbFile.length() / 1024L).coerceAtLeast(12L) else 16L
@@ -248,6 +250,16 @@ class MasalikRepository(
     fun exportSaveJson(save: SaveGameSchema): String = json.encodeToString(save)
 
     fun importSaveJson(raw: String): Result<SaveGameSchema> = runCatching {
-        json.decodeFromString<SaveGameSchema>(raw)
+        require(raw.length <= 1_000_000)
+        val parsed = json.parseToJsonElement(raw)
+        val savedFields = parsed as? JsonObject
+        require(savedFields != null && "schemaVersion" in savedFields && "selectedVehicleId" in savedFields)
+        val save = json.decodeFromString<SaveGameSchema>(raw)
+        require(save.schemaVersion in 1..2 && save.selectedVehicleId in save.unlockedVehicles)
+        require(save.masalikCoins >= 0 && save.driverXp >= 0 && save.playerDistanceM in 0f..RoadSplineNetwork.TOTAL_ROAD_LENGTH_M)
+        require(save.worldTimeHours in 0f..24f && save.totalCareerDistanceM.isFinite() && save.totalCareerDistanceM >= 0f)
+        require(save.missionBestTimesSec.values.all { it.isFinite() && it >= 0f })
+        require(save.missionCompletions.values.all { it >= 0 })
+        save
     }
 }

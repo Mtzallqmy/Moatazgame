@@ -1,8 +1,16 @@
 node_modules/
 build/
+.gradle/
+local.properties
+*.jks
+*.keystore
+*.apk
+*.aab
 dist/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+
+.kotlin/

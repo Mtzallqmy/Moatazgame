@@ -20,8 +20,11 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CameraAlt
@@ -69,6 +72,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.masalik.yemen.game.AutomaticShifterState
+import com.masalik.yemen.game.MissionOutcome
+import com.masalik.yemen.game.MissionRules
+import com.masalik.yemen.game.MissionRunResult
 import com.masalik.yemen.game.PhotoColorFilter
 import com.masalik.yemen.game.RoadSplineNetwork
 import com.masalik.yemen.game.TrafficSignalPhase
@@ -89,12 +95,22 @@ import com.masalik.yemen.ui.theme.MasalikMuted
 import com.masalik.yemen.ui.theme.MasalikObsidian
 import com.masalik.yemen.ui.theme.MasalikSky
 import com.masalik.yemen.ui.theme.MasalikSlate
+import kotlin.math.abs
 import kotlin.math.roundToInt
+
+internal fun PhotoColorFilter.photoTint(): Color = when (this) {
+    PhotoColorFilter.NATURAL -> Color.Transparent
+    PhotoColorFilter.GOLDEN_HOUR -> Color(0x28F59E0B)
+    PhotoColorFilter.WARM_COPPER -> Color(0x28C87236)
+    PhotoColorFilter.HIGHLAND_MIST -> Color(0x2694A3B8)
+    PhotoColorFilter.MONOCHROME -> Color(0x42111827)
+}
 
 @Composable
 fun DrivingHudOverlay(
     state: MasalikUiState,
-    vm: MasalikGameViewModel
+    vm: MasalikGameViewModel,
+    onCapturePhoto: () -> Unit
 ) {
     val t = state.telemetry
     val hud = state.saveState.hudSettings
@@ -105,13 +121,7 @@ fun DrivingHudOverlay(
     var handbrakeOn by remember { mutableStateOf(false) }
 
     // Photo mode color filter tint
-    val filterOverlayColor = when (state.photoFilter) {
-        PhotoColorFilter.NATURAL -> Color.Transparent
-        PhotoColorFilter.GOLDEN_HOUR -> Color(0x28F59E0B)
-        PhotoColorFilter.WARM_COPPER -> Color(0x28C87236)
-        PhotoColorFilter.HIGHLAND_MIST -> Color(0x2694A3B8)
-        PhotoColorFilter.MONOCHROME -> Color(0x42111827)
-    }
+    val filterOverlayColor = if (state.activeModal == ActiveModal.PHOTO) state.photoFilter.photoTint() else Color.Transparent
 
     Box(
         modifier = Modifier
@@ -127,6 +137,7 @@ fun DrivingHudOverlay(
                 onOrbit = { vm.orbitShowroom(it) },
                 onFilter = { vm.setPhotoFilter(it) },
                 onFov = { vm.setPhotoFov(it) },
+                onCapture = onCapturePhoto,
                 onClose = { vm.setModal(ActiveModal.DRIVING) }
             )
             return@Box
@@ -173,7 +184,9 @@ fun DrivingHudOverlay(
                 state.activeMission?.let { mission ->
                     val progress = ((t.distanceAlongRoadM - mission.startDistanceM) /
                         (mission.finishDistanceM - mission.startDistanceM).coerceAtLeast(10f)).coerceIn(0f, 1f)
-                    val remainingM = (mission.finishDistanceM - t.distanceAlongRoadM).coerceAtLeast(0f).roundToInt()
+                    val needsPickup = mission.requiresServiceStops && !state.missionPickupDone
+                    val target = if (needsPickup) MissionRules.pickupDistanceM(mission) else mission.finishDistanceM
+                    val remainingM = abs(target - t.distanceAlongRoadM).roundToInt()
                     Column(
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
@@ -193,7 +206,12 @@ fun DrivingHudOverlay(
                             trackColor = MasalikBorder
                         )
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("المتبقي: ${remainingM}م", color = MasalikIvory, fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp)
+                            val objective = when {
+                                needsPickup -> "توقّف للالتقاط"
+                                mission.requiresServiceStops -> "توقّف عند الوصول"
+                                else -> "المتبقي"
+                            }
+                            Text("$objective · ${remainingM}م", color = MasalikIvory, fontSize = 10.sp)
                             if (mission.hasAiRival) {
                                 Text("المركز: #${t.playerRaceRank}", color = MasalikEmerald, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             } else if (mission.cargoRequiredPct > 0) {
@@ -638,6 +656,7 @@ private fun PhotoModeOverlay(
     onOrbit: (Float) -> Unit,
     onFilter: (PhotoColorFilter) -> Unit,
     onFov: (Float) -> Unit,
+    onCapture: () -> Unit,
     onClose: () -> Unit
 ) {
     Box(
@@ -659,6 +678,15 @@ private fun PhotoModeOverlay(
                 }
             }
     ) {
+        Button(
+            onClick = onCapture,
+            modifier = Modifier.align(Alignment.TopEnd).testTag("photo_capture_button"),
+            colors = ButtonDefaults.buttonColors(containerColor = MasalikAmber, contentColor = MasalikObsidian)
+        ) {
+            Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("حفظ صورة")
+        }
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -682,6 +710,49 @@ private fun PhotoModeOverlay(
                 colors = SliderDefaults.colors(thumbColor = MasalikAmber, activeTrackColor = MasalikAmber)
             )
             ToolChip("عودة", true, onClose)
+        }
+    }
+}
+
+@Composable
+fun MissionResultScreen(
+    result: MissionRunResult,
+    onRetry: () -> Unit,
+    onBrowseMissions: () -> Unit,
+    onFreeRoam: () -> Unit
+) {
+    val won = result.outcome == MissionOutcome.SUCCESS
+    val accent = if (won) MasalikEmerald else MasalikCrimson
+    Box(
+        modifier = Modifier.fillMaxSize().background(MasalikObsidian.copy(alpha = 0.83f))
+            .windowInsetsPadding(WindowInsets.safeDrawing).padding(14.dp).testTag("mission_result"),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 430.dp).fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp)).background(MasalikSlate)
+                .border(1.dp, accent.copy(alpha = 0.6f), RoundedCornerShape(22.dp))
+                .verticalScroll(rememberScrollState()).padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(9.dp)
+        ) {
+            Text(result.outcome.messageAr, color = accent, fontSize = 21.sp, fontWeight = FontWeight.Black)
+            Text(result.mission.titleAr, color = MasalikIvory, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text("الزمن ${result.elapsedSec.roundToInt()} ثانية", color = MasalikMuted, fontSize = 13.sp)
+            if (won) {
+                Text("+${result.mission.rewardCoins} ر.ي · +${result.mission.rewardXp} XP", color = MasalikAmberSoft, fontSize = 14.sp)
+            }
+            Button(
+                onClick = if (won) onBrowseMissions else onRetry,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MasalikAmber, contentColor = MasalikObsidian)
+            ) {
+                Text(if (won) "اختيار مهمة" else "إعادة المحاولة")
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PauseActionChip(if (won) "إعادة المهمة" else "المهمات", Icons.Default.Flag, Modifier.weight(1f), if (won) onRetry else onBrowseMissions)
+                PauseActionChip("تجوال حر", Icons.Default.DirectionsCar, Modifier.weight(1f), onFreeRoam)
+            }
         }
     }
 }

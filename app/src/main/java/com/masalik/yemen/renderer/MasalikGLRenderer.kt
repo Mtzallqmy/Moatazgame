@@ -7,6 +7,7 @@ import android.opengl.Matrix
 import com.masalik.yemen.game.AtmosphereSnapshot
 import com.masalik.yemen.game.BullbarStyle
 import com.masalik.yemen.game.CameraMode
+import com.masalik.yemen.game.GraphicsQuality
 import com.masalik.yemen.game.LivingWorldSimulation
 import com.masalik.yemen.game.PedestrianAgent
 import com.masalik.yemen.game.PedestrianStyle
@@ -43,11 +44,12 @@ class MasalikGLRenderer(
         val isLobbyOrGarage: Boolean,
         val showroomOrbitRad: Float,
         val cameraMode: CameraMode,
+        val graphicsQuality: GraphicsQuality,
         val photoFovDeg: Float,
         val worldTimeHours: Float,
         val weather: WeatherPreset,
         val livingWorld: LivingWorldSimulation,
-        val finishDistanceM: Float?,
+        val missionMarkerM: Float?,
         val blinkerOn: Boolean
     )
 
@@ -72,6 +74,7 @@ class MasalikGLRenderer(
     private var aspectRatio = 16f / 9f
     private var lastFrameNs = System.nanoTime()
     private var lastStreamCenterDistM = -9999f
+    private var lastStreamQuality: GraphicsQuality? = null
     private var weatherAnimTime = 0f
 
     private var currentCamX = 0f
@@ -115,18 +118,19 @@ class MasalikGLRenderer(
 
     override fun onDrawFrame(gl: GL10?) {
         val now = System.nanoTime()
-        val dt = ((now - lastFrameNs) / 1_000_000_000f).coerceIn(0.005f, 0.05f)
+        val dt = ((now - lastFrameNs) / 1_000_000_000f).coerceIn(0f, 1f)
         lastFrameNs = now
-        weatherAnimTime += dt
+        weatherAnimTime += dt.coerceAtMost(0.2f)
 
         val snap = onStepFrame(dt)
         val atmo = LivingWorldSimulation.sampleAtmosphere(snap.worldTimeHours, snap.weather)
 
-        // Rebuild rolling 460m road/sidewalk/mountain terrain corridor whenever player moves > 55m
         val centerDist = snap.telemetry.distanceAlongRoadM
-        if (abs(centerDist - lastStreamCenterDistM) > 55f) {
-            rebuildStreamingCorridor(centerDist)
+        val quality = snap.graphicsQuality
+        if (abs(centerDist - lastStreamCenterDistM) > 45f || lastStreamQuality != quality) {
+            rebuildStreamingCorridor(centerDist, quality)
             lastStreamCenterDistM = centerDist
+            lastStreamQuality = quality
         }
 
         GLES30.glClearColor(atmo.skyR, atmo.skyG, atmo.skyB, 1f)
@@ -142,7 +146,7 @@ class MasalikGLRenderer(
             snap.cameraMode == CameraMode.COCKPIT -> 68f
             else -> 60f
         }
-        Matrix.perspectiveM(projMatrix, 0, fov, aspectRatio, 0.2f, 420f)
+        Matrix.perspectiveM(projMatrix, 0, fov, aspectRatio, 0.2f, quality.sceneryDistanceM + 100f)
         updateCameraMatrix(snap)
         Matrix.multiplyMM(vpMatrix, 0, projMatrix, 0, viewMatrix, 0)
 
@@ -166,10 +170,10 @@ class MasalikGLRenderer(
         drawYemeniCityEnvironment(centerDist, snap, atmo)
 
         // 6. Render Roadside Parked Cars
-        drawParkedCars(centerDist, snap.livingWorld)
+        drawParkedCars(centerDist, snap.livingWorld, quality.sceneryDistanceM)
 
         // 7. Render Animated Yemeni Residents / Pedestrians
-        drawYemeniPedestrians(centerDist, snap.livingWorld)
+        drawYemeniPedestrians(centerDist, snap.livingWorld, quality.sceneryDistanceM)
 
         // 8. Render Rule-Following AI Traffic Cars & Race Rival
         drawAiTrafficAndRival(centerDist, snap, atmo)
@@ -185,7 +189,7 @@ class MasalikGLRenderer(
 
         // 10. Render Weather Particles (Rain / Sandstorm)
         if (snap.weather in listOf(WeatherPreset.LIGHT_RAIN, WeatherPreset.HEAVY_RAIN, WeatherPreset.SANDSTORM)) {
-            drawWeatherParticles(snap.weather)
+            drawWeatherParticles(snap.weather, quality.weatherParticleScale)
         }
     }
 
@@ -288,9 +292,9 @@ class MasalikGLRenderer(
         Matrix.setLookAtM(viewMatrix, 0, eyeX, eyeY, eyeZ, targetX, targetY, targetZ, 0f, 1f, 0f)
     }
 
-    private fun rebuildStreamingCorridor(centerDistM: Float) {
-        val startM = (centerDistM - 150f).coerceAtLeast(0f)
-        val endM = (centerDistM + 320f).coerceAtMost(RoadSplineNetwork.TOTAL_ROAD_LENGTH_M)
+    private fun rebuildStreamingCorridor(centerDistM: Float, quality: GraphicsQuality) {
+        val startM = (centerDistM - quality.sceneryDistanceM * 0.7f - 40f).coerceAtLeast(0f)
+        val endM = (centerDistM + quality.sceneryDistanceM + 90f).coerceAtMost(RoadSplineNetwork.TOTAL_ROAD_LENGTH_M)
         val step = 5f
         val samples = mutableListOf<RoadSample>()
         var d = startM
@@ -430,8 +434,9 @@ class MasalikGLRenderer(
         snap: RenderFrameSnapshot,
         atmo: AtmosphereSnapshot
     ) {
-        val minD = ((centerDistM - 105f) / 22f).toInt().coerceAtLeast(1) * 22
-        val maxD = ((centerDistM + 230f) / 22f).toInt() * 22
+        val maxDistance = snap.graphicsQuality.sceneryDistanceM
+        val minD = ((centerDistM - maxDistance * 0.5f) / 22f).toInt().coerceAtLeast(1) * 22
+        val maxD = ((centerDistM + maxDistance) / 22f).toInt() * 22
         val nightGlow = atmo.nightFactor
 
         // 1. Buildings, Souks, Streetlamps, Trees & Tunnels along the corridor
@@ -441,6 +446,7 @@ class MasalikGLRenderer(
             if (d >= RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 20f) break
             val sample = RoadSplineNetwork.sampleAt(d)
             val hash = ((dInt * 2654435761L) ushr 16).toInt() and 0x7FFFFFFF
+            val showDetail = abs(d - centerDistM) <= snap.graphicsQuality.detailDistanceM
 
             // Rock Tunnel Archway
             if (sample.hasTunnel) {
@@ -492,14 +498,16 @@ class MasalikGLRenderer(
                     )
 
                     // Whitewashed roof parapet / Mafraj penthouse on Sana'a & Taiz houses
-                    drawOrientedBox(
-                        bx, sample.y + buildingH + 0.55f, bz, sample.headingRad,
-                        buildingW + 0.4f, 0.9f, buildingD + 0.4f,
-                        0.94f, 0.92f, 0.87f
-                    )
+                    if (showDetail) {
+                        drawOrientedBox(
+                            bx, sample.y + buildingH + 0.55f, bz, sample.headingRad,
+                            buildingW + 0.4f, 0.9f, buildingD + 0.4f,
+                            0.94f, 0.92f, 0.87f
+                        )
+                    }
 
                     // Street-level Yemeni Souk Shopfront with Striped Awning facing the sidewalk
-                    if (bHash % 2 == 0) {
+                    if (showDetail && bHash % 2 == 0) {
                         val shopLat = side * (sample.widthM * 0.5f + 3.45f)
                         drawOrientedBox(
                             sample.x + sample.rightX * shopLat, sample.y + 1.85f, sample.z + sample.rightZ * shopLat,
@@ -639,7 +647,7 @@ class MasalikGLRenderer(
         }
 
         // 5. Mission Finish Archway Banner
-        val finishM = snap.finishDistanceM
+        val finishM = snap.missionMarkerM
         if (finishM != null && abs(finishM - centerDistM) < 220f) {
             val s = RoadSplineNetwork.sampleAt(finishM)
             for (side in intArrayOf(-1, 1)) {
@@ -650,9 +658,9 @@ class MasalikGLRenderer(
         }
     }
 
-    private fun drawParkedCars(centerDistM: Float, livingWorld: LivingWorldSimulation) {
+    private fun drawParkedCars(centerDistM: Float, livingWorld: LivingWorldSimulation, viewDistanceM: Float) {
         for (car in livingWorld.parkedCars) {
-            if (abs(car.distanceM - centerDistM) > 170f) continue
+            if (abs(car.distanceM - centerDistM) > viewDistanceM) continue
             drawTrafficVehicleBody(
                 car.worldX, car.worldY, car.worldZ, car.headingRad,
                 car.type, car.colorR, car.colorG, car.colorB,
@@ -661,9 +669,9 @@ class MasalikGLRenderer(
         }
     }
 
-    private fun drawYemeniPedestrians(centerDistM: Float, livingWorld: LivingWorldSimulation) {
+    private fun drawYemeniPedestrians(centerDistM: Float, livingWorld: LivingWorldSimulation, viewDistanceM: Float) {
         for (ped in livingWorld.pedestrians) {
-            if (abs(ped.distanceM - centerDistM) > 155f) continue
+            if (abs(ped.distanceM - centerDistM) > viewDistanceM * 0.75f) continue
             drawPedestrianCharacter(ped)
         }
     }
@@ -719,7 +727,7 @@ class MasalikGLRenderer(
         atmo: AtmosphereSnapshot
     ) {
         for (car in snap.livingWorld.trafficVehicles) {
-            if (abs(car.distanceM - centerDistM) > 210f) continue
+            if (abs(car.distanceM - centerDistM) > snap.graphicsQuality.sceneryDistanceM) continue
             drawTrafficVehicleBody(
                 car.worldX, car.worldY, car.worldZ, car.headingRad,
                 car.type, car.colorR, car.colorG, car.colorB,
@@ -1022,9 +1030,9 @@ class MasalikGLRenderer(
         drawMeshWithCurrentMatrix(cubeMesh, 0.16f, 0.17f, 0.20f, textures.whiteTex, 0f, 1f, 1f, 0.12f * atmo.nightFactor, 0.08f * atmo.nightFactor, 0f)
     }
 
-    private fun drawWeatherParticles(weather: WeatherPreset) {
+    private fun drawWeatherParticles(weather: WeatherPreset, particleScale: Float) {
         val isSand = weather == WeatherPreset.SANDSTORM
-        val count = if (weather == WeatherPreset.HEAVY_RAIN) 55 else 30
+        val count = ((if (weather == WeatherPreset.HEAVY_RAIN) 55 else 30) * particleScale).toInt()
         val r = if (isSand) 0.88f else 0.78f
         val g = if (isSand) 0.70f else 0.86f
         val b = if (isSand) 0.44f else 0.96f

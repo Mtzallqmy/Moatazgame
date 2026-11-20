@@ -1,6 +1,7 @@
 package com.masalik.yemen.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.masalik.yemen.audio.MasalikAudioEngine
@@ -17,7 +18,9 @@ import com.masalik.yemen.game.GraphicsQuality
 import com.masalik.yemen.game.HudCustomizationSettings
 import com.masalik.yemen.game.LivingWorldSimulation
 import com.masalik.yemen.game.MissionDefinition
-import com.masalik.yemen.game.MissionsCatalog
+import com.masalik.yemen.game.MissionOutcome
+import com.masalik.yemen.game.MissionRules
+import com.masalik.yemen.game.MissionRunResult
 import com.masalik.yemen.game.NearbyTrafficSignalInfo
 import com.masalik.yemen.game.PhoneDatabaseStats
 import com.masalik.yemen.game.PhotoColorFilter
@@ -35,6 +38,10 @@ import com.masalik.yemen.game.WeatherPreset
 import com.masalik.yemen.game.YemenCityHub
 import com.masalik.yemen.input.GyroSteeringController
 import com.masalik.yemen.renderer.MasalikGLRenderer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,19 +50,22 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 
 enum class ActiveModal {
-    MENU, DRIVING, PAUSE, WORLD_MAP, GARAGE, MISSIONS, CONTROL_STUDIO, SETTINGS, PHOTO
+    MENU, DRIVING, PAUSE, WORLD_MAP, GARAGE, MISSIONS, CONTROL_STUDIO, SETTINGS, PHOTO, RESULTS
 }
 
 data class MasalikUiState(
     val saveState: SaveGameSchema = SaveGameSchema(),
+    val saveLoading: Boolean = true,
     val activeModal: ActiveModal = ActiveModal.MENU,
     val telemetry: VehicleTelemetry = VehicleTelemetry(),
     val nearbySignal: NearbyTrafficSignalInfo? = null,
     val cameraMode: CameraMode = CameraMode.CHASE_NEAR,
     val cleanCinematicHud: Boolean = false,
     val previewVehicleId: VehicleId = VehicleId.SHAHIQ,
-    val activeMission: MissionDefinition? = MissionsCatalog.ALL_OFFLINE_MISSIONS.firstOrNull(),
-    val missionTimeRemainingSec: Int = 95,
+    val activeMission: MissionDefinition? = null,
+    val missionTimeRemainingSec: Int = 0,
+    val missionPickupDone: Boolean = false,
+    val missionResult: MissionRunResult? = null,
     val missionBannerAr: String? = null,
     val radioOpen: Boolean = false,
     val displayClockStr: String = "09:00",
@@ -71,7 +81,9 @@ data class MasalikUiState(
 class MasalikGameViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = MasalikDatabase.getInstance(application)
-    private val repository = MasalikRepository(application, database.masalikDao())
+    private val repository = MasalikRepository(application, database)
+    private val saveOperations = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+    @Volatile private var saveAvailable = false
 
     val physics = VehiclePhysicsEngine()
     val livingWorld = LivingWorldSimulation()
@@ -94,29 +106,52 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
     private var autoSaveAccumulator: Float = 0f
     private var fpsFrameCount: Int = 0
     private var fpsAccumulator: Float = 0f
-    private var currentFps: Int = 60
+    private var currentFps: Int = 0
+    private var physicsAccumulator: Float = 0f
     private var blinkerTimer: Float = 0f
     private var blinkerPhase: Boolean = false
 
     private var tripStartDistM: Float = 0f
+    private var careerRecordedAtM: Float = 0f
     private var tripMaxSpeedKmh: Float = 0f
     private var tripStartTimeMs: Long = System.currentTimeMillis()
 
     init {
+        CoroutineScope(Dispatchers.IO).launch {
+            for (operation in saveOperations) {
+                try {
+                    operation()
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    Log.e("MasalikSave", "Could not write local progress", error)
+                    _uiState.update { it.copy(toastMessageAr = "تعذر حفظ التقدم على الجهاز") }
+                }
+            }
+        }
         viewModelScope.launch {
-            val loaded = repository.loadSaveGame()
-            worldTimeHours = loaded.worldTimeHours
-            applySaveToEngines(loaded)
-            val stats = repository.getDatabaseStats(loaded)
-            _uiState.update {
-                it.copy(
-                    saveState = loaded,
-                    previewVehicleId = loaded.selectedVehicleId,
-                    radioOpen = loaded.radioSettings.isOpen,
-                    displayClockStr = LivingWorldSimulation.formatWorldTime(worldTimeHours),
-                    activeTimePhase = LivingWorldSimulation.hoursToPreset(worldTimeHours),
-                    dbStats = stats
-                )
+            try {
+                val loaded = repository.loadSaveGame()
+                val stats = repository.getDatabaseStats(loaded)
+                synchronized(this@MasalikGameViewModel) {
+                    worldTimeHours = loaded.worldTimeHours
+                    applySaveToEngines(loaded)
+                    saveAvailable = true
+                    _uiState.update {
+                        it.copy(
+                            saveLoading = false,
+                            saveState = loaded,
+                            previewVehicleId = loaded.selectedVehicleId,
+                            radioOpen = loaded.radioSettings.isOpen,
+                            displayClockStr = LivingWorldSimulation.formatWorldTime(worldTimeHours),
+                            activeTimePhase = LivingWorldSimulation.hoursToPreset(worldTimeHours),
+                            dbStats = stats
+                        )
+                    }
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                Log.e("MasalikSave", "Could not load local progress", error)
+                _uiState.update { it.copy(saveLoading = false, toastMessageAr = "تعذر قراءة الحفظ. يمكنك القيادة دون حفظ التقدم.") }
             }
         }
     }
@@ -142,6 +177,7 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         audioEngine.weather = save.weather
     }
 
+    @Synchronized
     fun onResumeLifecycle() {
         audioEngine.start()
         if (_uiState.value.saveState.hudSettings.controlMode == TouchControlMode.TILT) {
@@ -149,29 +185,33 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    @Synchronized
     fun onPauseLifecycle() {
+        clearDrivingControls()
         gyroController.stop()
         audioEngine.stop()
-        saveSnapshotNow()
+        if (saveAvailable) saveSnapshotNow()
     }
 
     override fun onCleared() {
         super.onCleared()
         gyroController.stop()
         audioEngine.stop()
+        saveOperations.close()
     }
 
-    /** Called every frame on the OpenGL thread (~60fps) to step simulation & build render snapshot. */
-    fun stepSimulationFrame(dt: Float): MasalikGLRenderer.RenderFrameSnapshot {
+    @Synchronized
+    fun stepSimulationFrame(frameTimeSec: Float): MasalikGLRenderer.RenderFrameSnapshot {
         val state = _uiState.value
         val modal = state.activeModal
         val isDriving = modal == ActiveModal.DRIVING
         val isLobbyOrGarage = modal == ActiveModal.MENU || modal == ActiveModal.GARAGE
+        val dt = frameTimeSec.coerceIn(0f, 0.2f)
 
         fpsFrameCount++
-        fpsAccumulator += dt
+        fpsAccumulator += frameTimeSec
         if (fpsAccumulator >= 0.7f) {
-            currentFps = (fpsFrameCount / fpsAccumulator).toInt().coerceIn(15, 120)
+            currentFps = (fpsFrameCount / fpsAccumulator).toInt()
             fpsFrameCount = 0
             fpsAccumulator = 0f
         }
@@ -195,7 +235,7 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
 
         val atmo = LivingWorldSimulation.sampleAtmosphere(worldTimeHours, state.saveState.weather)
 
-        val telemetry: VehicleTelemetry
+        var steppedTelemetry: VehicleTelemetry? = null
         if (isDriving) {
             val effectiveSteer = if (state.saveState.hudSettings.controlMode == TouchControlMode.TILT) {
                 gyroController.steerNorm
@@ -208,22 +248,17 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
                 steer = effectiveSteer,
                 handbrake = inputHandbrake
             )
-            livingWorld.update(dt, physics.distanceAlongRoadM, physics.lateralOffsetM, physics.forwardSpeedMs, atmo.nightFactor)
-            telemetry = physics.step(dt, inputs, livingWorld)
-
-            if (physics.lastCollisionImpulse > 2.0f) {
-                audioEngine.triggerCollision((physics.lastCollisionImpulse / 14f).coerceIn(0.25f, 1f))
-            }
-            if (telemetry.speedKmh > tripMaxSpeedKmh) tripMaxSpeedKmh = telemetry.speedKmh
-
-            // Mission progress evaluation
-            val mission = state.activeMission
-            if (mission != null) {
-                missionElapsedSec += dt
-                val reachedFinish = telemetry.distanceAlongRoadM >= mission.finishDistanceM - 15f
-                if (reachedFinish) {
-                    completeActiveMission(mission, missionElapsedSec)
+            physicsAccumulator += dt
+            while (physicsAccumulator >= PHYSICS_STEP_SEC && _uiState.value.activeModal == ActiveModal.DRIVING) {
+                physicsAccumulator -= PHYSICS_STEP_SEC
+                livingWorld.update(PHYSICS_STEP_SEC, physics.distanceAlongRoadM, physics.lateralOffsetM, physics.forwardSpeedMs, atmo.nightFactor)
+                val telemetry = physics.step(PHYSICS_STEP_SEC, inputs, livingWorld)
+                steppedTelemetry = telemetry
+                tripMaxSpeedKmh = maxOf(tripMaxSpeedKmh, telemetry.speedKmh)
+                if (physics.lastCollisionImpulse > 2f) {
+                    audioEngine.triggerCollision((physics.lastCollisionImpulse / 14f).coerceIn(0.25f, 1f))
                 }
+                state.activeMission?.let { updateActiveMission(it, telemetry) }
             }
 
             // Periodic auto-save every 15s while driving
@@ -232,13 +267,13 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
                 autoSaveAccumulator = 0f
                 saveSnapshotNow()
             }
-        } else {
+        } else if (isLobbyOrGarage) {
             livingWorld.update(dt * 0.45f, physics.distanceAlongRoadM, physics.lateralOffsetM, 0f, atmo.nightFactor)
-            telemetry = physics.step(0.004f, ControlInputs(handbrake = true), null)
         }
+        val telemetry = steppedTelemetry ?: physics.snapshot(livingWorld, inputThrottle, inputBrake, inputHandbrake)
 
         // Update live audio synthesizer parameters
-        audioEngine.drivingActive = isDriving
+        audioEngine.drivingActive = _uiState.value.activeModal == ActiveModal.DRIVING
         audioEngine.engineRunning = telemetry.engineRunning
         audioEngine.engineBaseFreqHz = physics.spec.engineBaseFreqHz
         audioEngine.engineRpm = telemetry.rpm
@@ -279,37 +314,55 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
             previewCustomization = previewCustom,
             isLobbyOrGarage = isLobbyOrGarage,
             showroomOrbitRad = showroomOrbitRad,
-            cameraMode = _uiState.value.cameraMode,
+            cameraMode = if (modal == ActiveModal.PHOTO) CameraMode.FREE_PHOTO else _uiState.value.cameraMode,
+            graphicsQuality = currentSave.graphicsQuality,
             photoFovDeg = _uiState.value.photoFovDeg,
             worldTimeHours = worldTimeHours,
             weather = currentSave.weather,
             livingWorld = livingWorld,
-            finishDistanceM = _uiState.value.activeMission?.finishDistanceM,
+            missionMarkerM = _uiState.value.activeMission?.let { mission ->
+                if (mission.requiresServiceStops && !_uiState.value.missionPickupDone) MissionRules.pickupDistanceM(mission)
+                else mission.finishDistanceM
+            },
             blinkerOn = blinkerPhase
         )
     }
 
-    private fun completeActiveMission(mission: MissionDefinition, elapsedSec: Float) {
-        missionElapsedSec = 0f
-        physics.configureAiRival(false)
-        val current = _uiState.value.saveState
-        val nextCoins = current.masalikCoins + mission.rewardCoins
-        val nextXp = current.driverXp + mission.rewardXp
-        val prevBest = current.missionBestTimesSec[mission.id]
-        val newBest = if (prevBest == null || elapsedSec < prevBest) elapsedSec else prevBest
-        val prevCount = current.missionCompletions[mission.id] ?: 0
+    private fun updateActiveMission(mission: MissionDefinition, telemetry: VehicleTelemetry) {
+        missionElapsedSec += PHYSICS_STEP_SEC
+        if (mission.requiresServiceStops && !_uiState.value.missionPickupDone &&
+            MissionRules.isStoppedAt(telemetry, MissionRules.pickupDistanceM(mission))
+        ) {
+            _uiState.update { it.copy(missionPickupDone = true, missionBannerAr = "تم الالتقاط. توقّف عند نقطة الوصول.") }
+        }
+        val outcome = MissionRules.evaluate(mission, telemetry, missionElapsedSec, _uiState.value.missionPickupDone)
+        if (outcome != null) finishActiveMission(mission, outcome)
+    }
 
-        val updatedSave = current.copy(
-            masalikCoins = nextCoins,
-            driverXp = nextXp,
-            missionBestTimesSec = current.missionBestTimesSec + (mission.id to newBest),
-            missionCompletions = current.missionCompletions + (mission.id to (prevCount + 1))
-        )
-        commitSave(updatedSave)
+    private fun finishActiveMission(mission: MissionDefinition, outcome: MissionOutcome) {
+        val result = MissionRunResult(mission, outcome, missionElapsedSec)
+        missionElapsedSec = 0f
+        recordCurrentTripIfSignificant()
+        clearDrivingControls()
+        clearMissionVehicleSetup()
+        val current = snapshotSave()
+        val saved = if (outcome == MissionOutcome.SUCCESS) {
+            val best = minOf(result.elapsedSec, current.missionBestTimesSec[mission.id] ?: result.elapsedSec)
+            val completions = (current.missionCompletions[mission.id] ?: 0) + 1
+            current.copy(
+                masalikCoins = current.masalikCoins + mission.rewardCoins,
+                driverXp = current.driverXp + mission.rewardXp,
+                missionBestTimesSec = current.missionBestTimesSec + (mission.id to best),
+                missionCompletions = current.missionCompletions + (mission.id to completions)
+            )
+        } else current
+        commitSave(saved)
         _uiState.update {
             it.copy(
                 activeMission = null,
-                missionBannerAr = "أحسنت! أنجزت «${mission.titleAr}» وحصلت على +${mission.rewardCoins} ر.ي و +${mission.rewardXp} XP"
+                missionBannerAr = null,
+                missionResult = result,
+                activeModal = ActiveModal.RESULTS
             )
         }
     }
@@ -317,26 +370,38 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
     fun dismissMissionBanner() = _uiState.update { it.copy(missionBannerAr = null) }
     fun dismissToast() = _uiState.update { it.copy(toastMessageAr = null) }
 
+    @Synchronized
     fun setModal(modal: ActiveModal) {
         if (modal == ActiveModal.DRIVING && _uiState.value.activeModal != ActiveModal.DRIVING) {
-            tripStartDistM = physics.totalDistanceDrivenM
-            tripMaxSpeedKmh = 0f
-            tripStartTimeMs = System.currentTimeMillis()
+            beginTrip()
             if (_uiState.value.saveState.hudSettings.controlMode == TouchControlMode.TILT) {
                 gyroController.start()
             }
         } else if (modal != ActiveModal.DRIVING && _uiState.value.activeModal == ActiveModal.DRIVING) {
             recordCurrentTripIfSignificant()
-            inputThrottle = 0f
-            inputBrake = 0f
-            inputSteerNorm = 0f
-            audioEngine.hornActive = false
+            clearDrivingControls()
             saveSnapshotNow()
         }
         if (modal == ActiveModal.SETTINGS) {
             refreshDbStats()
         }
         _uiState.update { it.copy(activeModal = modal) }
+    }
+
+    private fun beginTrip() {
+        tripStartDistM = physics.totalDistanceDrivenM
+        tripMaxSpeedKmh = 0f
+        tripStartTimeMs = System.currentTimeMillis()
+        physicsAccumulator = 0f
+        autoSaveAccumulator = 0f
+    }
+
+    private fun clearDrivingControls() {
+        inputThrottle = 0f
+        inputBrake = 0f
+        inputSteerNorm = 0f
+        inputHandbrake = false
+        audioEngine.hornActive = false
     }
 
     private fun recordCurrentTripIfSignificant() {
@@ -353,14 +418,16 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
             maxSpeedKmh = tripMaxSpeedKmh,
             durationSec = durSec
         )
-        viewModelScope.launch {
+        if (saveAvailable) saveOperations.trySend {
             repository.logDrivingTrip(log)
             refreshDbStats()
         }
     }
 
+    @Synchronized
     fun startMission(mission: MissionDefinition) {
-        val current = _uiState.value.saveState
+        clearDrivingControls()
+        val current = snapshotSave()
         val chosenVehicle = if (mission.recommendedVehicleId in current.unlockedVehicles) {
             mission.recommendedVehicleId
         } else current.selectedVehicleId
@@ -368,11 +435,16 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         val custom = current.customizations[chosenVehicle]
             ?: VehicleFleetCatalog.defaultCustomizations().getValue(chosenVehicle)
         physics.selectVehicle(chosenVehicle, custom, current.fuelByVehicle[chosenVehicle], current.damageByVehicle[chosenVehicle])
+        if (mission.cargoRequiredPct > 0) {
+            physics.updateCustomization(custom.copy(cargoLoadPct = maxOf(45f, custom.cargoLoadPct)))
+            physics.damage = physics.damage.copy(cargoIntegrityPct = 100f)
+        }
         physics.weather = mission.weatherPreset
         physics.resetToRoad(mission.startDistanceM)
         physics.configureAiRival(mission.hasAiRival, mission.startDistanceM, mission.aiRivalSpeedMs)
         worldTimeHours = mission.timeOfDayPreset.hours
         missionElapsedSec = 0f
+        beginTrip()
 
         val nextSave = current.copy(
             selectedVehicleId = chosenVehicle,
@@ -386,19 +458,38 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
             it.copy(
                 activeMission = mission,
                 activeModal = ActiveModal.DRIVING,
+                missionPickupDone = false,
+                missionResult = null,
                 missionTimeRemainingSec = mission.targetTimeSec,
                 missionBannerAr = mission.dialogueBriefAr ?: "بدأت المهمة: ${mission.titleAr}"
             )
         }
     }
 
-    fun startFreeRoam() {
+    private fun clearMissionVehicleSetup(save: SaveGameSchema = _uiState.value.saveState) {
         physics.configureAiRival(false)
-        _uiState.update { it.copy(activeMission = null, activeModal = ActiveModal.DRIVING) }
+        val custom = save.customizations[physics.vehicleId]
+            ?: VehicleFleetCatalog.defaultCustomizations().getValue(physics.vehicleId)
+        physics.updateCustomization(custom)
     }
 
+    @Synchronized
+    fun startFreeRoam() {
+        clearMissionVehicleSetup()
+        clearDrivingControls()
+        beginTrip()
+        _uiState.update { it.copy(activeMission = null, missionResult = null, missionBannerAr = null, activeModal = ActiveModal.DRIVING) }
+    }
+
+    @Synchronized
     fun fastTravelToCity(city: YemenCityHub) {
+        if (_uiState.value.activeMission != null) {
+            _uiState.update { it.copy(toastMessageAr = "أنهِ المهمة أو ابدأ تجوالًا حرًا قبل الانتقال السريع.") }
+            return
+        }
         physics.resetToRoad(city.distanceM)
+        clearDrivingControls()
+        beginTrip()
         physics.weather = city.defaultWeather
         worldTimeHours = city.defaultTimeOfDay.hours
         val current = _uiState.value.saveState
@@ -423,34 +514,43 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
     // Garage & Customization
     fun selectPreviewVehicle(id: VehicleId) = _uiState.update { it.copy(previewVehicleId = id) }
 
+    @Synchronized
     fun orbitShowroom(deltaRad: Float) {
         showroomOrbitRad = (showroomOrbitRad + deltaRad) % (2f * kotlin.math.PI.toFloat())
     }
 
+    @Synchronized
     fun confirmSelectVehicle(id: VehicleId) {
-        val current = _uiState.value.saveState
-        if (id !in current.unlockedVehicles) return
+        if (_uiState.value.activeMission != null) {
+            _uiState.update { it.copy(toastMessageAr = "يمكنك تغيير المركبة بعد إنهاء المهمة أو مغادرتها.") }
+            return
+        }
+        if (id !in _uiState.value.saveState.unlockedVehicles) return
+        val current = snapshotSave()
         val custom = current.customizations[id] ?: VehicleFleetCatalog.defaultCustomizations().getValue(id)
         physics.selectVehicle(id, custom, current.fuelByVehicle[id], current.damageByVehicle[id])
         commitSave(current.copy(selectedVehicleId = id))
         _uiState.update { it.copy(previewVehicleId = id, toastMessageAr = "تم تجهيز مركبة «${VehicleFleetCatalog.specOf(id).nameAr}»") }
     }
 
+    @Synchronized
     fun unlockVehicle(id: VehicleId) {
         val spec = VehicleFleetCatalog.specOf(id)
-        val current = _uiState.value.saveState
-        if (id in current.unlockedVehicles || current.masalikCoins < spec.unlockPriceCoins) return
+        val existing = _uiState.value.saveState
+        if (id in existing.unlockedVehicles || existing.masalikCoins < spec.unlockPriceCoins) return
+        val current = snapshotSave()
         val updated = current.copy(
             masalikCoins = current.masalikCoins - spec.unlockPriceCoins,
             unlockedVehicles = (current.unlockedVehicles + id).distinct(),
-            selectedVehicleId = id
+            selectedVehicleId = if (_uiState.value.activeMission == null) id else current.selectedVehicleId
         )
         commitSave(updated)
         val custom = updated.customizations[id] ?: VehicleFleetCatalog.defaultCustomizations().getValue(id)
-        physics.selectVehicle(id, custom, updated.fuelByVehicle[id], updated.damageByVehicle[id])
+        if (updated.selectedVehicleId == id) physics.selectVehicle(id, custom, updated.fuelByVehicle[id], updated.damageByVehicle[id])
         _uiState.update { it.copy(previewVehicleId = id, toastMessageAr = "مبارك! تم شراء مركبة «${spec.nameAr}»") }
     }
 
+    @Synchronized
     fun updateVehicleCustomization(id: VehicleId, custom: VehicleCustomization) {
         val current = _uiState.value.saveState
         val updated = current.copy(customizations = current.customizations + (id to custom))
@@ -458,9 +558,10 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         commitSave(updated)
     }
 
+    @Synchronized
     fun upgradeMechanicalPart(id: VehicleId, part: String, cost: Int) {
         val current = _uiState.value.saveState
-        if (current.masalikCoins < cost) return
+        if (cost < 0 || current.masalikCoins < cost || id !in current.unlockedVehicles) return
         val old = current.customizations[id] ?: VehicleFleetCatalog.defaultCustomizations().getValue(id)
         val next = when (part) {
             "engine" -> old.copy(engineUpgradeLevel = (old.engineUpgradeLevel + 1).coerceAtMost(5))
@@ -469,6 +570,7 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
             "brake" -> old.copy(brakeUpgradeLevel = (old.brakeUpgradeLevel + 1).coerceAtMost(5))
             else -> old
         }
+        if (next == old) return
         val updated = current.copy(
             masalikCoins = current.masalikCoins - cost,
             customizations = current.customizations + (id to next)
@@ -477,8 +579,14 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         commitSave(updated)
     }
 
+    @Synchronized
     fun serviceAction(type: String, targetVehicleId: VehicleId = physics.vehicleId, cost: Int = 0) {
         val current = _uiState.value.saveState
+        if (cost < 0 || targetVehicleId !in current.unlockedVehicles) return
+        if (_uiState.value.activeMission != null && type == "workshop" && targetVehicleId == physics.vehicleId) {
+            _uiState.update { it.copy(toastMessageAr = "يمكن صيانة المركبة بعد انتهاء المهمة.") }
+            return
+        }
         if (cost > 0 && current.masalikCoins < cost) {
             _uiState.update { it.copy(toastMessageAr = "الرصيد غير كافٍ لهذه الخدمة") }
             return
@@ -498,12 +606,13 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
                 if (physics.vehicleId == targetVehicleId) physics.repairAll()
                 "تمت الصيانة الشاملة وإصلاح المركبة"
             }
-            else -> {
+            "car_wash" -> {
                 val old = curDmg[targetVehicleId] ?: com.masalik.yemen.game.DamageState()
                 curDmg[targetVehicleId] = old.copy(dirtMudLevel = 0f)
                 if (physics.vehicleId == targetVehicleId) physics.washVehicle()
                 "تم غسيل وتلميع المركبة وإزالة الطين"
             }
+            else -> return
         }
         commitSave(current.copy(masalikCoins = current.masalikCoins - cost, fuelByVehicle = curFuel, damageByVehicle = curDmg))
         _uiState.update { it.copy(toastMessageAr = msg) }
@@ -521,29 +630,42 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
     fun setPhotoFilter(filter: PhotoColorFilter) = _uiState.update { it.copy(photoFilter = filter) }
     fun setPhotoFov(fov: Float) = _uiState.update { it.copy(photoFovDeg = fov.coerceIn(32f, 82f)) }
 
+    @Synchronized
     fun setShifter(shifter: AutomaticShifterState) { physics.autoShifter = shifter }
+    @Synchronized
     fun toggleTransmissionMode() { physics.transmissionMode = if (physics.transmissionMode == "auto") "manual" else "auto" }
+    @Synchronized
     fun manualGearUp() = physics.shiftManualUp()
+    @Synchronized
     fun manualGearDown() = physics.shiftManualDown()
+    @Synchronized
     fun cycleDrivetrain() = physics.cycleDrivetrain()
+    @Synchronized
     fun toggleDiffLock() { physics.diffLockActive = !physics.diffLockActive }
+    @Synchronized
     fun toggleEngine() { physics.engineRunning = !physics.engineRunning }
+    @Synchronized
     fun toggleHeadlights() { physics.headlightsOn = !physics.headlightsOn }
+    @Synchronized
     fun toggleWipers() { physics.wipersOn = !physics.wipersOn }
+    @Synchronized
     fun toggleLeftIndicator() {
         physics.leftIndicatorOn = !physics.leftIndicatorOn
         if (physics.leftIndicatorOn) physics.rightIndicatorOn = false
     }
+    @Synchronized
     fun toggleRightIndicator() {
         physics.rightIndicatorOn = !physics.rightIndicatorOn
         if (physics.rightIndicatorOn) physics.leftIndicatorOn = false
     }
+    @Synchronized
     fun toggleCruiseControl() {
         physics.cruiseControlEnabled = !physics.cruiseControlEnabled
         if (physics.cruiseControlEnabled) {
             physics.cruiseTargetKmh = (physics.forwardSpeedMs * 3.6f).coerceIn(35f, 120f)
         }
     }
+    @Synchronized
     fun toggleAssist(name: String) {
         val a = physics.assists
         physics.assists = when (name) {
@@ -553,46 +675,55 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
             else -> a.copy(hdcEnabled = !a.hdcEnabled)
         }
     }
+    @Synchronized
     fun recoverVehicleOnRoad() = physics.resetToRoad(physics.distanceAlongRoadM, 2.55f)
     fun setHornActive(active: Boolean) { audioEngine.hornActive = active }
 
     // Time, Weather, Audio, Radio, HUD Studio & Settings
+    @Synchronized
     fun setWeather(weather: WeatherPreset) {
         physics.weather = weather
         audioEngine.weather = weather
         commitSave(_uiState.value.saveState.copy(weather = weather))
     }
 
+    @Synchronized
     fun setTimeOfDay(preset: TimeOfDayPreset) {
         worldTimeHours = preset.hours
         commitSave(_uiState.value.saveState.copy(timeOfDay = preset, worldTimeHours = preset.hours))
     }
 
+    @Synchronized
     fun toggleAutoTimeCycle() {
         val next = !_uiState.value.saveState.autoTimeCycleEnabled
         commitSave(_uiState.value.saveState.copy(autoTimeCycleEnabled = next))
     }
 
+    @Synchronized
     fun setDrivingRealism(mode: DrivingRealismMode) {
         physics.realismMode = mode
         commitSave(_uiState.value.saveState.copy(drivingRealism = mode))
     }
 
+    @Synchronized
     fun setGraphicsQuality(quality: GraphicsQuality) {
         commitSave(_uiState.value.saveState.copy(graphicsQuality = quality))
     }
 
+    @Synchronized
     fun updateAudioMixer(mixer: AudioMixerSettings) {
         audioEngine.mixer = mixer
         commitSave(_uiState.value.saveState.copy(audioMixer = mixer))
     }
 
+    @Synchronized
     fun toggleRadioOpen() {
         val open = !_uiState.value.radioOpen
         _uiState.update { it.copy(radioOpen = open) }
         commitSave(_uiState.value.saveState.copy(radioSettings = _uiState.value.saveState.radioSettings.copy(isOpen = open)))
     }
 
+    @Synchronized
     fun toggleRadioPlaying() {
         val cur = _uiState.value.saveState.radioSettings
         val next = cur.copy(isPlaying = !cur.isPlaying)
@@ -600,18 +731,21 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         commitSave(_uiState.value.saveState.copy(radioSettings = next))
     }
 
+    @Synchronized
     fun selectRadioStation(stationId: RadioStationId) {
         val next = _uiState.value.saveState.radioSettings.copy(stationId = stationId, isPlaying = true)
         audioEngine.radioSettings = next
         commitSave(_uiState.value.saveState.copy(radioSettings = next))
     }
 
+    @Synchronized
     fun setRadioVolume(vol: Float) {
         val next = _uiState.value.saveState.radioSettings.copy(volume = vol.coerceIn(0f, 1f))
         audioEngine.radioSettings = next
         commitSave(_uiState.value.saveState.copy(radioSettings = next))
     }
 
+    @Synchronized
     fun toggleRadioVinyl() {
         val cur = _uiState.value.saveState.radioSettings
         val next = cur.copy(lofiVinylEnabled = !cur.lofiVinylEnabled)
@@ -619,6 +753,7 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         commitSave(_uiState.value.saveState.copy(radioSettings = next))
     }
 
+    @Synchronized
     fun updateHudSettings(hud: HudCustomizationSettings) {
         physics.wheelRotationRangeDeg = hud.smartWheel.rotationRangeDeg
         physics.steeringAssistEnabled = hud.smartWheel.steeringAssist
@@ -626,68 +761,110 @@ class MasalikGameViewModel(application: Application) : AndroidViewModel(applicat
         commitSave(_uiState.value.saveState.copy(hudSettings = hud))
     }
 
+    @Synchronized
     fun runDiagnostics() {
         val res = physics.runEngineeringDiagnostics()
         _uiState.update { it.copy(diagnosticResults = res) }
     }
 
     fun refreshDbStats() {
+        if (!saveAvailable) return
         viewModelScope.launch {
-            val stats = repository.getDatabaseStats(_uiState.value.saveState)
-            _uiState.update { it.copy(dbStats = stats) }
+            try {
+                val stats = repository.getDatabaseStats(_uiState.value.saveState)
+                _uiState.update { it.copy(dbStats = stats) }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                Log.e("MasalikSave", "Could not read local statistics", error)
+            }
         }
     }
 
-    fun exportSaveJson(): String = repository.exportSaveJson(_uiState.value.saveState)
+    @Synchronized
+    fun exportSaveJson(): String = repository.exportSaveJson(saveSnapshotNow())
 
+    @Synchronized
     fun importSaveJson(raw: String) {
+        if (!saveAvailable) return
         val result = repository.importSaveJson(raw)
         result.onSuccess { imported ->
             worldTimeHours = imported.worldTimeHours
             applySaveToEngines(imported)
-            commitSave(imported)
-            _uiState.update { it.copy(toastMessageAr = "تم استيراد ملف الحفظ بنجاح!") }
+            clearMissionVehicleSetup(imported)
+            beginTrip()
+            careerRecordedAtM = physics.totalDistanceDrivenM
+            commitSave(imported, replaceMissionRecords = true)
+            _uiState.update {
+                it.copy(
+                    activeMission = null,
+                    missionResult = null,
+                    missionBannerAr = null,
+                    previewVehicleId = imported.selectedVehicleId,
+                    radioOpen = imported.radioSettings.isOpen
+                )
+            }
         }.onFailure {
             _uiState.update { it.copy(toastMessageAr = "تعذر قراءة ملف الحفظ، تأكد من صلاحية الملف.") }
         }
     }
 
+    @Synchronized
     fun resetAllProgress() {
-        viewModelScope.launch {
-            val fresh = repository.resetAllData()
-            worldTimeHours = fresh.worldTimeHours
-            applySaveToEngines(fresh)
-            val stats = repository.getDatabaseStats(fresh)
-            _uiState.update {
-                it.copy(
-                    saveState = fresh,
-                    previewVehicleId = fresh.selectedVehicleId,
-                    dbStats = stats,
-                    toastMessageAr = "تم تصفير قاعدة البيانات المحلية بالكامل."
-                )
-            }
+        if (!saveAvailable) return
+        val fresh = SaveGameSchema(timestampIso = Instant.now().toString())
+        worldTimeHours = fresh.worldTimeHours
+        applySaveToEngines(fresh)
+        clearMissionVehicleSetup(fresh)
+        beginTrip()
+        careerRecordedAtM = physics.totalDistanceDrivenM
+        commitSave(fresh, replaceMissionRecords = true, clearTrips = true)
+        _uiState.update {
+            it.copy(
+                activeMission = null,
+                missionResult = null,
+                missionBannerAr = null,
+                previewVehicleId = fresh.selectedVehicleId,
+                radioOpen = fresh.radioSettings.isOpen
+            )
         }
     }
 
-    private fun saveSnapshotNow() {
+    private fun snapshotSave(): SaveGameSchema {
         val cur = _uiState.value.saveState
-        val updated = cur.copy(
+        val distanceDelta = (physics.totalDistanceDrivenM - careerRecordedAtM).coerceAtLeast(0f)
+        careerRecordedAtM = physics.totalDistanceDrivenM
+        return cur.copy(
             worldTimeHours = worldTimeHours,
             timeOfDay = LivingWorldSimulation.hoursToPreset(worldTimeHours),
             playerDistanceM = physics.distanceAlongRoadM,
             lastRegionId = RoadSplineNetwork.getRegionAt(physics.distanceAlongRoadM).id,
             fuelByVehicle = cur.fuelByVehicle + (physics.vehicleId to physics.fuelLiters),
             damageByVehicle = cur.damageByVehicle + (physics.vehicleId to physics.damage),
-            totalCareerDistanceM = cur.totalCareerDistanceM + (physics.totalDistanceDrivenM - tripStartDistM).coerceAtLeast(0f)
+            totalCareerDistanceM = cur.totalCareerDistanceM + distanceDelta
         )
-        tripStartDistM = physics.totalDistanceDrivenM
-        commitSave(updated)
     }
 
-    private fun commitSave(next: SaveGameSchema) {
-        _uiState.update { it.copy(saveState = next) }
-        viewModelScope.launch {
-            repository.persistSaveGame(next)
+    private fun saveSnapshotNow(): SaveGameSchema = commitSave(snapshotSave())
+
+    private fun commitSave(
+        next: SaveGameSchema,
+        replaceMissionRecords: Boolean = false,
+        clearTrips: Boolean = false
+    ): SaveGameSchema {
+        val stamped = next.copy(timestampIso = Instant.now().toString())
+        _uiState.update { it.copy(saveState = stamped) }
+        if (saveAvailable) saveOperations.trySend {
+            repository.persistSaveGame(stamped, replaceMissionRecords, clearTrips)
+            if (replaceMissionRecords) {
+                val message = if (clearTrips) "تم تصفير التقدم." else "تم استيراد ملف الحفظ بنجاح."
+                _uiState.update { it.copy(toastMessageAr = message) }
+                refreshDbStats()
+            }
         }
+        return stamped
+    }
+
+    private companion object {
+        const val PHYSICS_STEP_SEC = 1f / 60f
     }
 }

@@ -114,15 +114,18 @@ class VehiclePhysicsEngine {
         manualGearIndex = 1
         fuelLiters = (savedFuel ?: spec.fuelTankLiters).coerceIn(0f, spec.fuelTankLiters)
         damage = savedDamage ?: DamageState()
+        engineRunning = fuelLiters > 0.01f
+        activeGearLabel = "D1"
         currentRpm = spec.idleRpm
     }
 
     fun updateCustomization(custom: VehicleCustomization) {
         customization = custom
+        syncWorldPosition()
     }
 
     fun resetToRoad(distanceM: Float, laneOffsetM: Float = 2.55f) {
-        distanceAlongRoadM = distanceM.coerceIn(10f, RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 20f)
+        distanceAlongRoadM = distanceM.coerceIn(ROAD_START_M, ROAD_END_M)
         lateralOffsetM = laneOffsetM
         forwardSpeedMs = 0f
         lateralSpeedMs = 0f
@@ -133,6 +136,9 @@ class VehiclePhysicsEngine {
         chassisRollRad = 0f
         autoShifter = AutomaticShifterState.D
         manualGearIndex = 1
+        activeGearLabel = "D1"
+        trafficViolationWarningAr = null
+        cruiseControlEnabled = false
         syncWorldPosition()
     }
 
@@ -377,9 +383,16 @@ class VehiclePhysicsEngine {
         val advanceM = forwardSpeedMs * cos(headingOffsetFromRoadRad) * dt
         val lateralDeltaM = forwardSpeedMs * sin(headingOffsetFromRoadRad) * dt
         val prevDist = distanceAlongRoadM
-        distanceAlongRoadM = (distanceAlongRoadM + advanceM).coerceIn(8f, RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 15f)
+        val requestedDistanceM = prevDist + advanceM
+        distanceAlongRoadM = requestedDistanceM.coerceIn(ROAD_START_M, ROAD_END_M)
+        if ((advanceM > 0f && distanceAlongRoadM == ROAD_END_M) ||
+            (advanceM < 0f && distanceAlongRoadM == ROAD_START_M)
+        ) {
+            forwardSpeedMs = 0f
+            cruiseControlEnabled = false
+        }
         lateralOffsetM += lateralDeltaM
-        totalDistanceDrivenM += abs(advanceM)
+        totalDistanceDrivenM += abs(distanceAlongRoadM - prevDist)
 
         // Soft road/sidewalk boundary + guardrail collision
         val maxLat = (sample.widthM * 0.5f) + if (sample.isUrbanStreet) 0.55f else 1.65f
@@ -452,7 +465,15 @@ class VehiclePhysicsEngine {
         }
 
         syncWorldPosition()
+        return snapshot(livingWorld, throttle, brake, input.handbrake)
+    }
 
+    fun snapshot(
+        livingWorld: LivingWorldSimulation? = null,
+        throttle: Float = 0f,
+        brake: Float = 0f,
+        handbrake: Boolean = false
+    ): VehicleTelemetry {
         // Nearby POI / service station detection
         var nearServiceType: String? = null
         var nearServiceName: String? = null
@@ -493,7 +514,7 @@ class VehiclePhysicsEngine {
             realismMode = realismMode,
             throttle = throttle,
             brake = brake,
-            handbrake = input.handbrake,
+            handbrake = handbrake,
             steeringInputNorm = currentSteerInputNorm,
             steeringWheelAngleDeg = currentSteerInputNorm * (wheelRotationRangeDeg * 0.5f),
             altitudeM = altitudeM,
@@ -564,11 +585,11 @@ class VehiclePhysicsEngine {
         results.add(EngineeringTestResult("t3", "systems", "فحص كتالوج المهام بدون إنترنت", MissionsCatalog.ALL_OFFLINE_MISSIONS.size == 65, "65 مهمة · 5 فصول", "طور القصة والتحديات اليومية تعمل محلياً 100% دون اتصال."))
         results.add(EngineeringTestResult("t4", "physics", "فحص تماسك الأسطح الـ 6", VehicleFleetCatalog.gripFor(TireCompoundType.MUD_ROCK, SurfaceType.MUD) > VehicleFleetCatalog.gripFor(TireCompoundType.HIGHWAY_SPORT, SurfaceType.MUD), "M/T > H/T في الطين", "منحنيات احتكاك الإطارات تتجاوب واقعياً مع الإسفلت والطين والرمل."))
         results.add(EngineeringTestResult("t5", "world", "فحص نظام إشارات المرور والذكاء الاصطناعي", RoadSplineNetwork.TRAFFIC_INTERSECTIONS.size == 10, "10 تقاطعات ضوئية", "الإشارات الضوئية متزامنة مع توقف سيارات المرور وعبور المشاة."))
-        results.add(EngineeringTestResult("t6", "android", "محرك الرسوميات OpenGL ES 3.0", true, "Native GLES 3.0", "محرك ثلاثي الأبعاد أصلي بلغة Kotlin بدون WebView."))
-        results.add(EngineeringTestResult("t7", "android", "محرك الصوت وراديو Lo-Fi اليمني", true, "AudioTrack · 5 محطات", "توليد صوتي فوري للمحرك والمقامات اليمنية دون إنترنت."))
-        results.add(EngineeringTestResult("t8", "android", "قاعدة بيانات Room SQLite المحلية", true, "6 جداول منظمة", "حفظ محلي دائم وآمن للملف الشخصي والكراج والمهام والرحلات."))
-        results.add(EngineeringTestResult("t9", "systems", "استوديو التحكم والمقود الذكي", true, "180°–900° + Gyro", "دعم اللمس المتعدد والجيروسكوب وتخصيص مواقع الأدوات."))
-        results.add(EngineeringTestResult("t10", "world", "دورة 24 ساعة و6 حالات طقس", true, "Continuous Sky/Fog", "إضاءة ديناميكية نهارية وليلية مع مصابيح الشوارع والقمريات."))
         return results
+    }
+
+    private companion object {
+        const val ROAD_START_M = 10f
+        const val ROAD_END_M = RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 15f
     }
 }

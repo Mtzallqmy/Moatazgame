@@ -78,11 +78,16 @@ enum class DrivingRealismMode(val labelAr: String) {
 }
 
 @Serializable
-enum class GraphicsQuality(val labelAr: String) {
-    LOW("منخفض"),
-    MEDIUM("متوسط"),
-    HIGH("عالٍ"),
-    ULTRA("فائق 3D")
+enum class GraphicsQuality(
+    val labelAr: String,
+    val sceneryDistanceM: Float,
+    val detailDistanceM: Float,
+    val weatherParticleScale: Float
+) {
+    LOW("منخفض", 115f, 35f, 0.25f),
+    MEDIUM("متوسط", 165f, 75f, 0.55f),
+    HIGH("عالٍ", 230f, 140f, 1f),
+    ULTRA("فائق 3D", 300f, 230f, 1.35f)
 }
 
 @Serializable
@@ -477,6 +482,7 @@ data class MissionDefinition(
     val hasAiRival: Boolean = false,
     val aiRivalSpeedMs: Float = 18.5f,
     val cargoRequiredPct: Int = 0,
+    val requiresServiceStops: Boolean = category == GameModeCategory.PASSENGER || category == GameModeCategory.RESCUE,
     val dialogueBriefAr: String? = null
 )
 
