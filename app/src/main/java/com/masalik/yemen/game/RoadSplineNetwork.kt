@@ -181,6 +181,21 @@ object RoadSplineNetwork {
         TrafficIntersectionDef("sig_aden", "إشارة كورنيش عدن", 21420f, 6f)
     )
 
+    val ROUNDABOUTS: List<RoundaboutDef> = listOf(
+        RoundaboutDef("rb_taiz_qasr", "جولة القصر — تعز", 640f, 9.5f, 0),
+        RoundaboutDef("rb_ibb_udayn", "جولة العدين الكبرى — إب", 3580f, 9.8f, 1),
+        RoundaboutDef("rb_sanaa_misbahi", "جولة المصباحي — صنعاء", 13920f, 10.5f, 2),
+        RoundaboutDef("rb_aden_caltex", "جولة كالتكس — عدن", 21220f, 10.2f, 1)
+    )
+
+    val SPEED_RADARS: List<SpeedRadarDef> = listOf(
+        SpeedRadarDef("rad_taiz_jamal", "رادار ساهر — شارع جمال تعز", 420f, 80),
+        SpeedRadarDef("rad_ibb_blvd", "رادار ساهر — بوليفارد إب", 3200f, 80),
+        SpeedRadarDef("rad_dhamar_hwy", "رادار ساهر — طريق ذمار السريع", 11780f, 100),
+        SpeedRadarDef("rad_sanaa_hadda", "رادار ساهر — شارع حدة صنعاء", 13680f, 90),
+        SpeedRadarDef("rad_aden_corniche", "رادار ساهر — كورنيش عدن", 21040f, 80)
+    )
+
     val WORLD_POIS: List<WorldPoi> = listOf(
         WorldPoi("poi_fuel_taiz", "محطة صبر للوقود", "fuel", 520f, 9.5f, RegionId.TAIZ_HIGHLANDS),
         WorldPoi("poi_work_taiz", "ورشة تعز للصيانة", "workshop", 1620f, -9.5f, RegionId.TAIZ_HIGHLANDS),
@@ -276,13 +291,21 @@ object RoadSplineNetwork {
     }
 
     private fun isUrbanCorridor(d: Float): Boolean {
-        return d in 0f..1750f ||
+        return d in 0f..1850f ||
             d in 3050f..4850f ||
             d in 11100f..12050f ||
-            d in 13500f..16100f ||
+            d in 13400f..16100f ||
             d in 18250f..19400f ||
             d in 19850f..20550f ||
-            d in 20950f..21900f
+            d in 20900f..21920f
+    }
+
+    /** Modern Yemeni commercial avenues & waterfront boulevards (glass towers, palm medians, bright LED avenues). */
+    private fun isModernBoulevardCorridor(d: Float): Boolean {
+        return d in 0f..820f ||           // Modern Taiz Jamal Boulevard & Al-Hawban
+            d in 3050f..3950f ||          // Modern Ibb University / Green City Avenue
+            d in 13400f..14700f ||        // Modern Sana'a Hadda & Zubairi Towers
+            d in 20900f..21920f           // Modern Aden Corniche & Gold Mohur Waterfront
     }
 
     private fun buildSplineSamples(): Array<RoadSample> {
@@ -290,6 +313,7 @@ object RoadSplineNetwork {
         val xs = FloatArray(count)
         val ys = FloatArray(count)
         val zs = FloatArray(count)
+        val curvatures = FloatArray(count)
 
         var curX = 0f
         var curZ = 0f
@@ -298,18 +322,22 @@ object RoadSplineNetwork {
         for (i in 0 until count) {
             val d = i * SAMPLE_STEP_M
             val urban = isUrbanCorridor(d)
+            val modern = isModernBoulevardCorridor(d)
             val region = getRegionAt(d)
 
-            // Smooth authentic mountain switchbacks outside cities, straighter realistic avenues inside cities
+            // Realistic sweeping avenues in modern cities + dramatic hairpin switchbacks in highlands & Naqil Samara
             val curvature = when {
-                urban -> sin(d * 0.0022f) * 0.0014f
-                region.id == RegionId.NAQIL_SAHAB -> sin(d * 0.0085f) * 0.0072f + cos(d * 0.0038f) * 0.0035f
+                modern -> sin(d * 0.0024f) * 0.0018f + cos(d * 0.0011f) * 0.0009f
+                urban -> sin(d * 0.0032f) * 0.0024f
+                region.id == RegionId.NAQIL_SAHAB ->
+                    sin(d * 0.0095f) * 0.0098f + cos(d * 0.0042f) * 0.0048f
                 region.id in listOf(RegionId.TAIZ_HIGHLANDS, RegionId.IBB_GREEN_PEAKS, RegionId.WADI_RAYHAN) ->
-                    sin(d * 0.0055f) * 0.0046f + cos(d * 0.0024f) * 0.0020f
-                else -> sin(d * 0.0030f) * 0.0022f
+                    sin(d * 0.0068f) * 0.0064f + cos(d * 0.0028f) * 0.0030f
+                else -> sin(d * 0.0038f) * 0.0032f + cos(d * 0.0017f) * 0.0015f
             }
+            curvatures[i] = curvature
             heading += curvature * SAMPLE_STEP_M
-            heading = heading.coerceIn(-1.15f, 1.15f)
+            heading = heading.coerceIn(-1.38f, 1.38f)
 
             xs[i] = curX
             zs[i] = curZ
@@ -344,6 +372,7 @@ object RoadSplineNetwork {
 
             val region = getRegionAt(d)
             val urban = isUrbanCorridor(d)
+            val modern = isModernBoulevardCorridor(d)
             val hasTunnel = d in 8620f..8760f || d in 9640f..9770f
             val hasBridge = d in 6020f..6160f || d in 17420f..17560f
 
@@ -354,6 +383,15 @@ object RoadSplineNetwork {
                 else -> region.defaultSurface
             }
 
+            val nearRoundabout = ROUNDABOUTS.any { abs(it.distanceM - d) < 22f }
+            val width = when {
+                nearRoundabout -> 18.4f
+                modern -> 13.4f
+                urban -> 11.6f
+                else -> 9.8f
+            }
+            val bankRad = (curvatures[i] * 6.5f).coerceIn(-0.075f, 0.075f)
+
             RoadSample(
                 distanceM = d,
                 x = xs[i],
@@ -362,13 +400,16 @@ object RoadSplineNetwork {
                 headingRad = hRad,
                 rightX = cos(hRad),
                 rightZ = -sin(hRad),
-                widthM = if (urban) 11.4f else 9.6f,
+                widthM = width,
                 gradePct = gradePct,
                 surface = surface,
                 regionId = region.id,
                 regionNameAr = region.nameAr,
                 chunkId = (d / 1000f).toInt(),
                 isUrbanStreet = urban,
+                isModernBoulevard = modern,
+                curvatureRadPerM = curvatures[i],
+                bankAngleRad = bankRad,
                 hasTunnel = hasTunnel,
                 hasBridge = hasBridge
             )

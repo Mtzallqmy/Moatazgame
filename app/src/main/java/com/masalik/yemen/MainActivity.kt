@@ -1,7 +1,16 @@
 package com.masalik.yemen
 
+import android.content.ContentValues
+import android.content.Context
+import android.graphics.Bitmap
 import android.opengl.GLSurfaceView
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
+import android.view.PixelCopy
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -41,6 +50,7 @@ import com.masalik.yemen.ui.screens.DrivingHudOverlay
 import com.masalik.yemen.ui.screens.GarageShowroomScreen
 import com.masalik.yemen.ui.screens.MainMenuLobbyScreen
 import com.masalik.yemen.ui.screens.MissionsAndStoryScreen
+import com.masalik.yemen.ui.screens.ReplayStudioOverlay
 import com.masalik.yemen.ui.screens.SettingsAndSaveScreen
 import com.masalik.yemen.ui.screens.YemenWorldMapScreen
 import com.masalik.yemen.ui.screens.YemeniRadioOverlay
@@ -64,7 +74,15 @@ class MainActivity : ComponentActivity() {
             MasalikTheme {
                 MasalikRootScreen(
                     vm = viewModel,
-                    onBindGLView = { glSurfaceViewRef = it }
+                    onBindGLView = { glSurfaceViewRef = it },
+                    onCaptureScreenshot = {
+                        viewModel.audioEngine.triggerCameraShutter()
+                        captureGLScreenshotToGallery(
+                            glView = glSurfaceViewRef,
+                            context = this,
+                            onResult = { ok -> viewModel.notifyScreenshotSaved(ok) }
+                        )
+                    }
                 )
             }
         }
@@ -95,7 +113,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MasalikRootScreen(
     vm: MasalikGameViewModel,
-    onBindGLView: (GLSurfaceView?) -> Unit
+    onBindGLView: (GLSurfaceView?) -> Unit,
+    onCaptureScreenshot: () -> Unit
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -139,6 +158,7 @@ private fun MasalikRootScreen(
         when (state.activeModal) {
             ActiveModal.DRIVING -> vm.setModal(ActiveModal.PAUSE)
             ActiveModal.PAUSE, ActiveModal.PHOTO -> vm.setModal(ActiveModal.DRIVING)
+            ActiveModal.REPLAY -> vm.exitReplayMode()
             ActiveModal.WORLD_MAP,
             ActiveModal.GARAGE,
             ActiveModal.MISSIONS,
@@ -172,7 +192,9 @@ private fun MasalikRootScreen(
             ActiveModal.MENU -> {
                 MainMenuLobbyScreen(
                     saveState = state.saveState,
+                    activeTimePhase = state.activeTimePhase,
                     onStartDriving = { vm.setModal(ActiveModal.DRIVING) },
+                    onCycleDayNight = { vm.cycleQuickDayNight() },
                     onOpenWorldMap = { vm.setModal(ActiveModal.WORLD_MAP) },
                     onOpenMissions = { vm.setModal(ActiveModal.MISSIONS) },
                     onOpenGarage = { vm.setModal(ActiveModal.GARAGE) },
@@ -183,7 +205,24 @@ private fun MasalikRootScreen(
             }
 
             ActiveModal.DRIVING, ActiveModal.PAUSE, ActiveModal.PHOTO -> {
-                DrivingHudOverlay(state = state, vm = vm)
+                DrivingHudOverlay(
+                    state = state,
+                    vm = vm,
+                    onCaptureScreenshot = onCaptureScreenshot
+                )
+            }
+
+            ActiveModal.REPLAY -> {
+                ReplayStudioOverlay(
+                    state = state,
+                    onOrbitDrone = { vm.orbitShowroom(it) },
+                    onTogglePlay = { vm.toggleReplayPlayPause() },
+                    onScrub = { vm.scrubReplay(it) },
+                    onSelectSpeed = { vm.setReplaySpeed(it) },
+                    onSelectCamera = { vm.setReplayCameraAngle(it) },
+                    onCaptureScreenshot = onCaptureScreenshot,
+                    onExitReplay = { vm.exitReplayMode() }
+                )
             }
 
             ActiveModal.WORLD_MAP -> {
@@ -278,5 +317,63 @@ private fun MasalikRootScreen(
                 Text(msg, color = MasalikIvory, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
+}
+
+/**
+ * Zero-permission Play-Policy-compliant HD Screenshot capture of the live OpenGL ES 3.0 GLSurfaceView
+ * directly into the user's Pictures/Masalik album via PixelCopy + MediaStore.Images.
+ */
+private fun captureGLScreenshotToGallery(
+    glView: GLSurfaceView?,
+    context: Context,
+    onResult: (Boolean) -> Unit
+) {
+    if (glView == null || glView.width <= 0 || glView.height <= 0 || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        onResult(false)
+        return
+    }
+    val bitmap = Bitmap.createBitmap(glView.width, glView.height, Bitmap.Config.ARGB_8888)
+    try {
+        PixelCopy.request(
+            glView,
+            bitmap,
+            { copyResult ->
+                if (copyResult != PixelCopy.SUCCESS) {
+                    bitmap.recycle()
+                    onResult(false)
+                    return@request
+                }
+                val saved = runCatching {
+                    val fileName = "Masalik_${System.currentTimeMillis()}.png"
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/Masalik")
+                            put(MediaStore.Images.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: return@runCatching false
+                    resolver.openOutputStream(uri)?.use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        values.clear()
+                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        resolver.update(uri, values, null, null)
+                    }
+                    true
+                }.getOrDefault(false)
+                bitmap.recycle()
+                onResult(saved)
+            },
+            Handler(Looper.getMainLooper())
+        )
+    } catch (_: Throwable) {
+        bitmap.recycle()
+        onResult(false)
     }
 }

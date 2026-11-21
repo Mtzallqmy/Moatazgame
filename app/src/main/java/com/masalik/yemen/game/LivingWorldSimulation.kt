@@ -6,7 +6,18 @@ import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.sin
 
-enum class TrafficVehicleType { SEDAN, PICKUP, MINIBUS, TRUCK }
+enum class TrafficVehicleType {
+    SEDAN,
+    SPORTS_COUPE,
+    SUV_LUXURY,
+    TAXI_YEMEN,
+    PICKUP,
+    HATCHBACK,
+    MINIBUS,
+    TRUCK,
+    POLICE,
+    AMBULANCE
+}
 
 data class TrafficVehicleAgent(
     val id: Int,
@@ -14,7 +25,10 @@ data class TrafficVehicleAgent(
     var speedMs: Float,
     val baseSpeedMs: Float,
     val direction: Int, // +1 forward lane (right), -1 oncoming lane (left)
-    val laneOffsetM: Float,
+    var laneOffsetM: Float,
+    var targetLaneOffsetM: Float = laneOffsetM,
+    var turnSignalDir: Int = 0, // -1 left, 0 none, +1 right
+    var laneChangeTimerSec: Float = 6f,
     val type: TrafficVehicleType,
     val colorR: Float,
     val colorG: Float,
@@ -22,6 +36,10 @@ data class TrafficVehicleAgent(
     var braking: Boolean = false,
     var headlightsOn: Boolean = false,
     var wheelSpinRad: Float = 0f,
+    var steerAngleRad: Float = 0f,
+    var bodyRollDeg: Float = 0f,
+    var bodyPitchDeg: Float = 0f,
+    var suspensionBobM: Float = 0f,
     var worldX: Float = 0f,
     var worldY: Float = 0f,
     var worldZ: Float = 0f,
@@ -101,17 +119,30 @@ class LivingWorldSimulation {
 
     var nearbyTrafficSignal: NearbyTrafficSignalInfo? = null
         private set
+    var nearbyRadar: RadarAlertInfo? = null
+        private set
+    var emergencySirenProximity: Float = 0f
+        private set
 
+    private val radarCooldowns = HashMap<String, Float>()
     private var elapsedSec: Float = 0f
     private val carColors = listOf(
-        Triple(0.92f, 0.93f, 0.95f), // Yemeni pearl white pickup/sedan
-        Triple(0.76f, 0.78f, 0.80f), // Silver metallic
-        Triple(0.82f, 0.72f, 0.50f), // Desert champagne
-        Triple(0.16f, 0.36f, 0.62f), // Coastal blue
-        Triple(0.68f, 0.18f, 0.16f), // Deep crimson
-        Triple(0.20f, 0.24f, 0.28f), // Basalt charcoal
-        Triple(0.86f, 0.56f, 0.14f), // Taxi amber/gold
-        Triple(0.18f, 0.44f, 0.32f)  // Highland green
+        Triple(0.95f, 0.95f, 0.96f), // Pearl Frost White
+        Triple(0.78f, 0.81f, 0.85f), // Liquid Silver Metallic
+        Triple(0.86f, 0.74f, 0.48f), // Marib Desert Champagne
+        Triple(0.11f, 0.44f, 0.86f), // Electric Sapphire Blue
+        Triple(0.86f, 0.14f, 0.16f), // Racing Crimson Red
+        Triple(0.14f, 0.17f, 0.22f), // Obsidian Charcoal
+        Triple(0.94f, 0.68f, 0.08f), // Golden Sunset Amber
+        Triple(0.10f, 0.56f, 0.38f), // Ibb Emerald Metallic
+        Triple(0.06f, 0.62f, 0.68f), // Socotra Turquoise
+        Triple(0.92f, 0.36f, 0.08f), // Volcanic Sunset Orange
+        Triple(0.42f, 0.18f, 0.66f), // Royal Amethyst
+        Triple(0.52f, 0.10f, 0.18f), // Deep Wine Burgundy
+        Triple(0.42f, 0.48f, 0.54f), // Nardo Sport Grey
+        Triple(0.12f, 0.58f, 0.86f), // Coastal Sky Metallic
+        Triple(0.76f, 0.46f, 0.22f), // Sabir Bronze Copper
+        Triple(0.24f, 0.38f, 0.26f)  // Highland Olive
     )
 
     init {
@@ -122,28 +153,61 @@ class LivingWorldSimulation {
 
     private fun spawnInitialTraffic(centerDistanceM: Float) {
         trafficVehicles.clear()
-        val types = TrafficVehicleType.entries
-        for (i in 0 until 26) {
+        val normalTypes = listOf(
+            TrafficVehicleType.SEDAN,
+            TrafficVehicleType.SUV_LUXURY,
+            TrafficVehicleType.PICKUP,
+            TrafficVehicleType.TAXI_YEMEN,
+            TrafficVehicleType.SPORTS_COUPE,
+            TrafficVehicleType.HATCHBACK,
+            TrafficVehicleType.MINIBUS,
+            TrafficVehicleType.TRUCK
+        )
+        for (i in 0 until 34) {
             val dir = if (i % 2 == 0) 1 else -1
-            val dist = (centerDistanceM + (i - 12) * 34f + (i % 3) * 7f)
+            val dist = (centerDistanceM + (i - 16) * 28f + (i % 3) * 6f)
                 .coerceIn(25f, RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 30f)
-            val type = types[i % types.size]
-            val baseSpeed = when (type) {
-                TrafficVehicleType.SEDAN -> 13.5f + (i % 4) * 1.1f
-                TrafficVehicleType.PICKUP -> 12.2f + (i % 3) * 1.0f
-                TrafficVehicleType.MINIBUS -> 11.0f + (i % 3) * 0.8f
-                TrafficVehicleType.TRUCK -> 9.4f + (i % 3) * 0.7f
+            val type = when (i) {
+                5, 21 -> TrafficVehicleType.POLICE
+                13, 29 -> TrafficVehicleType.AMBULANCE
+                else -> normalTypes[i % normalTypes.size]
             }
-            val color = carColors[i % carColors.size]
+            val baseSpeed = when (type) {
+                TrafficVehicleType.SPORTS_COUPE -> 17.8f + (i % 3) * 1.2f
+                TrafficVehicleType.POLICE -> 17.5f
+                TrafficVehicleType.AMBULANCE -> 16.8f
+                TrafficVehicleType.SUV_LUXURY -> 14.4f + (i % 3) * 0.9f
+                TrafficVehicleType.SEDAN -> 13.8f + (i % 4) * 1.0f
+                TrafficVehicleType.TAXI_YEMEN -> 13.2f + (i % 3) * 0.9f
+                TrafficVehicleType.HATCHBACK -> 13.4f + (i % 3) * 1.0f
+                TrafficVehicleType.PICKUP -> 12.6f + (i % 3) * 0.9f
+                TrafficVehicleType.MINIBUS -> 11.4f + (i % 3) * 0.8f
+                TrafficVehicleType.TRUCK -> 9.6f + (i % 3) * 0.7f
+            }
+            val color = when (type) {
+                TrafficVehicleType.POLICE -> Triple(0.95f, 0.96f, 0.98f)
+                TrafficVehicleType.AMBULANCE -> Triple(0.98f, 0.98f, 0.98f)
+                TrafficVehicleType.TAXI_YEMEN -> Triple(0.96f, 0.76f, 0.08f)
+                TrafficVehicleType.SPORTS_COUPE -> listOf(
+                    Triple(0.90f, 0.12f, 0.16f),
+                    Triple(0.08f, 0.46f, 0.92f),
+                    Triple(0.96f, 0.42f, 0.06f),
+                    Triple(0.96f, 0.82f, 0.08f),
+                    Triple(0.08f, 0.74f, 0.66f)
+                )[i % 5]
+                else -> carColors[(i * 3) % carColors.size]
+            }
             val laneOffset = if (dir > 0) 2.75f else -2.75f
             trafficVehicles.add(
                 TrafficVehicleAgent(
                     id = i,
                     distanceM = dist,
-                    speedMs = baseSpeed * 0.8f,
+                    speedMs = baseSpeed * 0.82f,
                     baseSpeedMs = baseSpeed,
                     direction = dir,
                     laneOffsetM = laneOffset,
+                    targetLaneOffsetM = laneOffset,
+                    laneChangeTimerSec = 4.5f + (i % 7) * 1.9f,
                     type = type,
                     colorR = color.first,
                     colorG = color.second,
@@ -229,24 +293,36 @@ class LivingWorldSimulation {
 
     private fun generateRoadsideParkedCars(): List<ParkedCarPlacement> {
         val list = mutableListOf<ParkedCarPlacement>()
-        val types = listOf(TrafficVehicleType.PICKUP, TrafficVehicleType.SEDAN, TrafficVehicleType.MINIBUS, TrafficVehicleType.PICKUP)
-        var d = 48f
+        val types = listOf(
+            TrafficVehicleType.SUV_LUXURY,
+            TrafficVehicleType.SEDAN,
+            TrafficVehicleType.PICKUP,
+            TrafficVehicleType.HATCHBACK,
+            TrafficVehicleType.TAXI_YEMEN,
+            TrafficVehicleType.SPORTS_COUPE,
+            TrafficVehicleType.MINIBUS
+        )
+        var d = 46f
         var idx = 0
         while (d < RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 60f) {
             val sample = RoadSplineNetwork.sampleAt(d)
             if (sample.isUrbanStreet && !sample.hasTunnel && !sample.hasBridge) {
-                // Keep clear of traffic signal intersections
                 val nearSignal = RoadSplineNetwork.TRAFFIC_INTERSECTIONS.any { abs(it.distanceM - d) < 26f }
                 if (!nearSignal) {
                     val side = if (idx % 2 == 0) 1 else -1
                     val lat = side * (sample.widthM * 0.5f + 0.15f)
-                    val color = carColors[(idx * 3 + 1) % carColors.size]
+                    val tType = types[idx % types.size]
+                    val color = if (tType == TrafficVehicleType.TAXI_YEMEN) {
+                        Triple(0.96f, 0.76f, 0.08f)
+                    } else {
+                        carColors[(idx * 5 + 2) % carColors.size]
+                    }
                     val heading = if (side > 0) sample.headingRad else sample.headingRad + PI.toFloat()
                     list.add(
                         ParkedCarPlacement(
                             distanceM = d,
                             lateralOffsetM = lat,
-                            type = types[idx % types.size],
+                            type = tType,
                             colorR = color.first,
                             colorG = color.second,
                             colorB = color.third,
@@ -257,7 +333,7 @@ class LivingWorldSimulation {
                         )
                     )
                 }
-                d += 34f + (idx % 3) * 14f
+                d += 30f + (idx % 3) * 12f
             } else {
                 d += 140f
             }
@@ -274,6 +350,24 @@ class LivingWorldSimulation {
         nightFactor: Float
     ) {
         elapsedSec += dt
+        val cdIter = radarCooldowns.entries.iterator()
+        while (cdIter.hasNext()) {
+            val e = cdIter.next()
+            e.setValue(e.value - dt)
+            if (e.value <= 0f) cdIter.remove()
+        }
+
+        // Update closest Speed Radar ahead (within 180m)
+        var closestRadar: RadarAlertInfo? = null
+        var bestRadarAhead = 185f
+        for (rad in RoadSplineNetwork.SPEED_RADARS) {
+            val ahead = rad.distanceM - playerDistanceM
+            if (ahead in -5f..bestRadarAhead) {
+                bestRadarAhead = ahead
+                closestRadar = RadarAlertInfo(rad.id, rad.nameAr, ahead.coerceAtLeast(0f), rad.speedLimitKmh)
+            }
+        }
+        nearbyRadar = closestRadar
 
         // 1. Update Traffic Signals (26-second realistic cycle: 12s Green, 3s Yellow, 11s Red)
         var closestSignalAhead: NearbyTrafficSignalInfo? = null
@@ -360,7 +454,8 @@ class LivingWorldSimulation {
             ped.worldZ = pedSample.z + pedSample.rightZ * ped.lateralOffsetM
         }
 
-        // 3. Update Rule-Following AI Traffic Cars
+        // 3. Update Rule-Following AI Traffic Cars (including Emergency Police/Ambulance & Turn Signals)
+        var maxSirenProx = 0f
         for (car in trafficVehicles) {
             // Respawn far-away cars ahead/behind the player to keep every city street bustling
             val deltaToPlayer = car.distanceM - playerDistanceM
@@ -372,15 +467,49 @@ class LivingWorldSimulation {
                     .coerceIn(20f, RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 25f)
             }
 
-            val sample = RoadSplineNetwork.sampleAt(car.distanceM)
-            var targetSpeed = car.baseSpeedMs * if (sample.isUrbanStreet) 0.78f else 1.0f
+            if (car.type == TrafficVehicleType.POLICE || car.type == TrafficVehicleType.AMBULANCE) {
+                val distAbs = abs(car.distanceM - playerDistanceM)
+                if (distAbs < 95f) {
+                    maxSirenProx = maxOf(maxSirenProx, (1f - distAbs / 95f))
+                }
+            }
 
-            // Rule A: Stop cleanly at RED or YELLOW traffic signals before the crosswalk
-            for (sig in trafficSignals) {
-                val distToStopLine = (sig.def.distanceM - car.distanceM) * car.direction - 4.8f
-                if (distToStopLine in -1.5f..36f) {
-                    if (sig.phase == TrafficSignalPhase.RED || (sig.phase == TrafficSignalPhase.YELLOW && distToStopLine > 7f)) {
-                        targetSpeed = if (distToStopLine <= 2.2f) 0f else minOf(targetSpeed, distToStopLine * 0.42f)
+            val sample = RoadSplineNetwork.sampleAt(car.distanceM)
+            val isEmergency = car.type == TrafficVehicleType.POLICE || car.type == TrafficVehicleType.AMBULANCE
+            var targetSpeed = car.baseSpeedMs * if (sample.isUrbanStreet && !isEmergency) 0.78f else 1.0f
+
+            // Dynamic AI Lane Changing with Blinking Turn Signals on Modern 4-Lane Boulevards & Roundabouts
+            val nearRoundabout = RoadSplineNetwork.ROUNDABOUTS.any { abs(it.distanceM - car.distanceM) < 22f }
+            if (nearRoundabout) {
+                car.targetLaneOffsetM = car.direction * 6.4f
+                car.turnSignalDir = car.direction
+            } else {
+                car.laneChangeTimerSec -= dt
+                if (car.laneChangeTimerSec <= 0f) {
+                    car.laneChangeTimerSec = 7.5f + ((car.id * 17 + elapsedSec.toInt()) % 8)
+                    car.targetLaneOffsetM = if (sample.isModernBoulevard) {
+                        val outer = abs(car.targetLaneOffsetM) < 3.4f
+                        car.direction * (if (outer) 4.45f else 2.25f)
+                    } else {
+                        car.direction * 2.75f
+                    }
+                }
+                val laneDelta = car.targetLaneOffsetM - car.laneOffsetM
+                car.turnSignalDir = when {
+                    abs(laneDelta) > 0.25f -> if (laneDelta * car.direction > 0f) 1 else -1
+                    else -> 0
+                }
+            }
+            car.laneOffsetM += (car.targetLaneOffsetM - car.laneOffsetM).coerceIn(-2.2f * dt, 2.2f * dt)
+
+            // Rule A: Stop cleanly at RED or YELLOW traffic signals before the crosswalk (Emergency may cruise cautiously)
+            if (!isEmergency) {
+                for (sig in trafficSignals) {
+                    val distToStopLine = (sig.def.distanceM - car.distanceM) * car.direction - 4.8f
+                    if (distToStopLine in -1.5f..36f) {
+                        if (sig.phase == TrafficSignalPhase.RED || (sig.phase == TrafficSignalPhase.YELLOW && distToStopLine > 7f)) {
+                            targetSpeed = if (distToStopLine <= 2.2f) 0f else minOf(targetSpeed, distToStopLine * 0.42f)
+                        }
                     }
                 }
             }
@@ -399,6 +528,7 @@ class LivingWorldSimulation {
             // Rule C: Maintain safe following distance from other AI cars in same lane
             for (other in trafficVehicles) {
                 if (other.id == car.id || other.direction != car.direction) continue
+                if (abs(other.laneOffsetM - car.laneOffsetM) > 1.8f) continue
                 val gap = (other.distanceM - car.distanceM) * car.direction
                 if (gap in 1f..24f) {
                     val safeLimit = if (gap < 11.5f) 0f else other.speedMs * ((gap - 10f) / 14f).coerceIn(0f, 1f)
@@ -407,7 +537,7 @@ class LivingWorldSimulation {
             }
 
             // Rule D: Yield cleanly to player vehicle if player is ahead in the same lane
-            val sameLaneAsPlayer = abs(playerLateralM - car.laneOffsetM) < 2.25f
+            val sameLaneAsPlayer = abs(playerLateralM - car.laneOffsetM) < 2.15f
             if (sameLaneAsPlayer) {
                 val gapToPlayer = (playerDistanceM - car.distanceM) * car.direction
                 if (gapToPlayer in 2f..26f) {
@@ -416,24 +546,58 @@ class LivingWorldSimulation {
                 }
             }
 
-            // Smooth acceleration & braking
+            // Smooth acceleration, braking & realistic suspension pitch/roll/steering yaw physics
             val prevSpeed = car.speedMs
-            val rate = if (targetSpeed < car.speedMs) 9.5f else 4.2f
+            val prevLat = car.laneOffsetM
+            val rate = if (targetSpeed < car.speedMs) 9.5f else 4.6f
             car.speedMs += (targetSpeed - car.speedMs).coerceIn(-rate * dt, rate * dt)
             car.speedMs = car.speedMs.coerceAtLeast(0f)
+            val accelMs2 = (car.speedMs - prevSpeed) / dt.coerceAtLeast(0.005f)
             car.braking = (targetSpeed < prevSpeed - 0.8f) || car.speedMs < 0.4f
-            car.headlightsOn = nightFactor > 0.32f || sample.hasTunnel
+            car.headlightsOn = isEmergency || nightFactor > 0.32f || sample.hasTunnel
 
             car.distanceM = (car.distanceM + car.direction * car.speedMs * dt)
                 .coerceIn(15f, RoadSplineNetwork.TOTAL_ROAD_LENGTH_M - 15f)
             car.wheelSpinRad = (car.wheelSpinRad + (car.speedMs / 0.38f) * dt) % (2f * PI.toFloat())
 
             val updatedSample = RoadSplineNetwork.sampleAt(car.distanceM)
+            val latVel = (car.laneOffsetM - prevLat) / dt.coerceAtLeast(0.005f)
+            val laneYawRad = if (car.speedMs > 1.5f) {
+                (latVel / car.speedMs).coerceIn(-0.22f, 0.22f) * car.direction
+            } else 0f
+
+            // Visible front-wheel steering angle into curves & lane changes
+            val curveSteer = (updatedSample.curvatureRadPerM * 26f * car.direction).coerceIn(-0.42f, 0.42f)
+            val targetSteer = (curveSteer + laneYawRad * 1.4f).coerceIn(-0.48f, 0.48f)
+            car.steerAngleRad += (targetSteer - car.steerAngleRad) * (dt * 9f).coerceAtMost(1f)
+
+            // Realistic chassis lean (body roll) in turns + brake nose-dive (body pitch) + organic road bob
+            val targetRoll = ((updatedSample.curvatureRadPerM * car.speedMs * car.speedMs * 2.2f + latVel * 1.4f) * car.direction)
+                .coerceIn(-4.2f, 4.2f)
+            val targetPitch = (-accelMs2 * 0.38f).coerceIn(-2.8f, 3.4f)
+            car.bodyRollDeg += (targetRoll - car.bodyRollDeg) * (dt * 7.5f).coerceAtMost(1f)
+            car.bodyPitchDeg += (targetPitch - car.bodyPitchDeg) * (dt * 8.0f).coerceAtMost(1f)
+            car.suspensionBobM = sin(elapsedSec * 5.2f + car.id * 1.7f) * (0.012f + (car.speedMs / 18f) * 0.018f)
+
             car.worldX = updatedSample.x + updatedSample.rightX * car.laneOffsetM
-            car.worldY = updatedSample.y
+            car.worldY = updatedSample.y + car.suspensionBobM
             car.worldZ = updatedSample.z + updatedSample.rightZ * car.laneOffsetM
-            car.headingRad = if (car.direction > 0) updatedSample.headingRad else updatedSample.headingRad + PI.toFloat()
+            car.headingRad = (if (car.direction > 0) updatedSample.headingRad else updatedSample.headingRad + PI.toFloat()) + laneYawRad
         }
+        emergencySirenProximity = maxSirenProx
+    }
+
+    fun checkSpeedRadarViolation(prevDistM: Float, newDistM: Float, speedKmh: Float): SpeedRadarDef? {
+        for (rad in RoadSplineNetwork.SPEED_RADARS) {
+            if (radarCooldowns.containsKey(rad.id)) continue
+            val crossed = (prevDistM < rad.distanceM && newDistM >= rad.distanceM) ||
+                (prevDistM > rad.distanceM && newDistM <= rad.distanceM)
+            if (crossed && speedKmh > rad.speedLimitKmh + 8f) {
+                radarCooldowns[rad.id] = 18f
+                return rad
+            }
+        }
+        return null
     }
 
     fun checkPlayerTrafficCollision(playerDistM: Float, playerLatM: Float, playerSpeedMs: Float): Float {

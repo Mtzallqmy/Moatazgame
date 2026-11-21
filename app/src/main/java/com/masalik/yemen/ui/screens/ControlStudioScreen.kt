@@ -18,10 +18,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Tune
@@ -39,18 +41,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.masalik.yemen.game.DriverSeatSide
 import com.masalik.yemen.game.HudCustomizationSettings
-import com.masalik.yemen.game.SmartWheelSettings
+import com.masalik.yemen.game.SteeringWheelStyle
 import com.masalik.yemen.game.TouchControlMode
 import com.masalik.yemen.ui.theme.JetBrainsMonoFontFamily
 import com.masalik.yemen.ui.theme.MasalikAmber
 import com.masalik.yemen.ui.theme.MasalikAmberSoft
 import com.masalik.yemen.ui.theme.MasalikBorder
 import com.masalik.yemen.ui.theme.MasalikCard
+import com.masalik.yemen.ui.theme.MasalikCrimson
 import com.masalik.yemen.ui.theme.MasalikEmerald
 import com.masalik.yemen.ui.theme.MasalikIvory
 import com.masalik.yemen.ui.theme.MasalikMuted
@@ -63,6 +69,8 @@ private data class HudLayoutPreset(
     val nameAr: String,
     val descAr: String,
     val mode: TouchControlMode,
+    val wheelStyle: SteeringWheelStyle,
+    val seatSide: DriverSeatSide,
     val wheelDeg: Int,
     val scale: Float,
     val opacity: Float,
@@ -76,16 +84,40 @@ fun ControlStudioScreen(
     onCalibrateGyro: () -> Unit,
     onClose: () -> Unit
 ) {
-    var activeTab by remember { mutableIntStateOf(0) } // 0=Mode, 1=Smart Wheel, 2=Presets
+    var activeTab by remember { mutableIntStateOf(1) } // Start directly on Smart Wheel Styles & Cockpit Feel
 
     val presets = remember {
         listOf(
-            HudLayoutPreset("الوضع المتوازن (افتراضي)", "مقود ذكي 270° بحجم مريح ووضوح عالٍ", TouchControlMode.WHEEL, 270, 1.0f, 0.92f, false),
-            HudLayoutPreset("محاكاة احترافية 900°", "دوران مقود واقعي كامل 900° لمرتفعات اليمن", TouchControlMode.WHEEL, 900, 1.15f, 0.88f, false),
-            HudLayoutPreset("قيادة بالأزرار السريعة", "أزرار يمين/يسار دقيقة للمنعطفات الحادة", TouchControlMode.BUTTONS, 270, 1.10f, 0.95f, false),
-            HudLayoutPreset("توجيه الجيروسكوب (إمالة)", "إمالة الهاتف للتوجيه السلس في الوضع الأفقي", TouchControlMode.TILT, 360, 1.0f, 0.84f, false),
-            HudLayoutPreset("عصا تحكم رياضية", "عصا تحكم أفقية ناعمة للسباقات السريعة", TouchControlMode.JOYSTICK, 180, 1.05f, 0.90f, false),
-            HudLayoutPreset("وضع اليد اليسرى المعكوس", "تبديل أماكن التوجيه والدواسات لمستخدمي اليسار", TouchControlMode.WHEEL, 360, 1.0f, 0.92f, true)
+            HudLayoutPreset(
+                "أوروبي رياضي فاخر (D-Cut)",
+                "مقود D-Cut بزاوية 540° ومبدّلات غيار خلفية ودقة ألمانية",
+                TouchControlMode.WHEEL, SteeringWheelStyle.EUROPEAN_LUXURY, DriverSeatSide.LEFT_HAND, 540, 1.05f, 0.92f, false
+            ),
+            HudLayoutPreset(
+                "شرقي / خليجي 4×4 للقمم",
+                "مقود خشب وجلد فاخر بزاوية 720° ناعم لمرتفعات اليمن",
+                TouchControlMode.WHEEL, SteeringWheelStyle.GULF_YEMENI, DriverSeatSide.LEFT_HAND, 720, 1.05f, 0.92f, false
+            ),
+            HudLayoutPreset(
+                "ياباني درفت (مقود يمين RHD)",
+                "مقصورة يمينية RHD مع مقود ألكانتارا 360° واستجابة فورية",
+                TouchControlMode.WHEEL, SteeringWheelStyle.JAPANESE_SPORT, DriverSeatSide.RIGHT_HAND, 360, 1.08f, 0.90f, false
+            ),
+            HudLayoutPreset(
+                "محاكاة كلاسيكية 900° كاملة",
+                "مقود خشب وكروم بدوران كامل 900° وإرجاع ذاتي هادئ",
+                TouchControlMode.WHEEL, SteeringWheelStyle.CLASSIC_HERITAGE, DriverSeatSide.LEFT_HAND, 900, 1.12f, 0.88f, false
+            ),
+            HudLayoutPreset(
+                "توجيه الجيروسكوب (إمالة)",
+                "إمالة الهاتف للتوجيه السلس في الوضع الأفقي",
+                TouchControlMode.TILT, SteeringWheelStyle.EUROPEAN_LUXURY, DriverSeatSide.LEFT_HAND, 360, 1.0f, 0.84f, false
+            ),
+            HudLayoutPreset(
+                "وضع اليد اليسرى المعكوس",
+                "تبديل أماكن المقود والدواسات مع أزرار دقيقة",
+                TouchControlMode.WHEEL, SteeringWheelStyle.GULF_YEMENI, DriverSeatSide.LEFT_HAND, 540, 1.0f, 0.92f, true
+            )
         )
     }
 
@@ -107,8 +139,8 @@ fun ControlStudioScreen(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(Icons.Default.Tune, contentDescription = null, tint = MasalikAmber, modifier = Modifier.size(22.dp))
                 Column {
-                    Text("استوديو التحكم والمقود الذكي", color = MasalikAmberSoft, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                    Text("اختر أسلوب القيادة، اضبط زاوية دوران المقود (180°–900°)، وخصّص الشفافية", color = MasalikMuted, fontSize = 11.sp)
+                    Text("استوديو التحكم والدركسون الذكي — مَسَالِك", color = MasalikAmberSoft, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                    Text("اختر طراز الدركسون (شرقي / أوروبي / رياضي / كلاسيكي)، مقود يسار/يمين، والزاوية 180°–900°", color = MasalikMuted, fontSize = 11.sp)
                 }
             }
             Row(
@@ -117,7 +149,7 @@ fun ControlStudioScreen(
                     .background(MasalikCard)
                     .border(1.dp, MasalikBorder, RoundedCornerShape(10.dp))
                     .clickable(onClick = onClose)
-                    .padding(horizontal = 12.dp, vertical = 7.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
                     .testTag("close_control_studio_button"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -132,9 +164,9 @@ fun ControlStudioScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            StudioTabChip("طراز الدركسون والمقصورة", Icons.Default.DirectionsCar, activeTab == 1, Modifier.weight(1f)) { activeTab = 1 }
             StudioTabChip("أسلوب التحكم والواجهة", Icons.Default.Gamepad, activeTab == 0, Modifier.weight(1f)) { activeTab = 0 }
-            StudioTabChip("ضبط المقود الذكي", Icons.Default.Tune, activeTab == 1, Modifier.weight(1f)) { activeTab = 1 }
-            StudioTabChip("قوالب جاهزة (6)", Icons.Default.GridView, activeTab == 2, Modifier.weight(1f)) { activeTab = 2 }
+            StudioTabChip("قوالب احترافية (6)", Icons.Default.GridView, activeTab == 2, Modifier.weight(1f)) { activeTab = 2 }
         }
 
         Column(
@@ -192,7 +224,7 @@ fun ControlStudioScreen(
                                 .border(1.dp, MasalikBorder, RoundedCornerShape(14.dp))
                                 .padding(12.dp)
                         ) {
-                            Text("حجم أزرار المقود والدواسات: ${(hudSettings.buttonScale * 100).roundToInt()}%", color = MasalikIvory, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("حجم الدركسون والدواسات: ${(hudSettings.buttonScale * 100).roundToInt()}%", color = MasalikIvory, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             Slider(
                                 value = hudSettings.buttonScale,
                                 onValueChange = { onUpdateHud(hudSettings.copy(buttonScale = it)) },
@@ -218,11 +250,14 @@ fun ControlStudioScreen(
                         }
                     }
 
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         ToggleCard("إظهار الخريطة المصغرة GPS", hudSettings.showMinimap, Modifier.weight(1f)) {
                             onUpdateHud(hudSettings.copy(showMinimap = it))
                         }
-                        ToggleCard("عكس اتجاه الأزرار (يمين / يسار)", hudSettings.mirrorControls, Modifier.weight(1f)) {
+                        ToggleCard("المرآة الخلفية الحية (Rear Mirror)", hudSettings.rearMirrorEnabled, Modifier.weight(1f)) {
+                            onUpdateHud(hudSettings.copy(rearMirrorEnabled = it))
+                        }
+                        ToggleCard("عكس اتجاه المقود والدواسات", hudSettings.mirrorControls, Modifier.weight(1f)) {
                             onUpdateHud(hudSettings.copy(mirrorControls = it))
                         }
                     }
@@ -230,9 +265,87 @@ fun ControlStudioScreen(
 
                 1 -> {
                     val sw = hudSettings.smartWheel
+                    Text("طراز الدركسون وإحساس التوجيه (ينعكس في الـ HUD والمقصورة 3D)", color = MasalikAmberSoft, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+
+                    SteeringWheelStyle.entries.chunked(2).forEach { pair ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            pair.forEach { style ->
+                                val selected = sw.wheelStyle == style
+                                val accent = when (style) {
+                                    SteeringWheelStyle.GULF_YEMENI -> MasalikAmber
+                                    SteeringWheelStyle.EUROPEAN_LUXURY -> MasalikSky
+                                    SteeringWheelStyle.JAPANESE_SPORT -> MasalikCrimson
+                                    SteeringWheelStyle.CLASSIC_HERITAGE -> Color(0xFFD4A373)
+                                }
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(if (selected) accent.copy(alpha = 0.18f) else MasalikCard)
+                                        .border(1.5.dp, if (selected) accent else MasalikBorder, RoundedCornerShape(14.dp))
+                                        .clickable {
+                                            onUpdateHud(
+                                                hudSettings.copy(
+                                                    smartWheel = sw.copy(
+                                                        wheelStyle = style,
+                                                        rotationRangeDeg = style.defaultLockDeg
+                                                    )
+                                                )
+                                            )
+                                        }
+                                        .padding(12.dp)
+                                        .testTag("wheel_style_${style.name.lowercase()}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                            Box(Modifier.size(10.dp).clip(CircleShape).background(accent))
+                                            Text(style.labelAr, color = if (selected) accent else MasalikIvory, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                                        }
+                                        Text(
+                                            "${style.defaultLockDeg}°",
+                                            color = accent,
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(style.descAr, color = MasalikMuted, fontSize = 10.sp, lineHeight = 14.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    // Driver Seat Side (LHD vs RHD)
+                    Text("موضع مقود السائق داخل المقصورة (شرقي يمين / خليجي وأوروبي يسار)", color = MasalikAmberSoft, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        DriverSeatSide.entries.forEach { side ->
+                            val sel = sw.seatSide == side
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(13.dp))
+                                    .background(if (sel) MasalikEmerald.copy(alpha = 0.20f) else MasalikCard)
+                                    .border(1.5.dp, if (sel) MasalikEmerald else MasalikBorder, RoundedCornerShape(13.dp))
+                                    .clickable { onUpdateHud(hudSettings.copy(smartWheel = sw.copy(seatSide = side))) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    .testTag("seat_side_${side.name.lowercase()}"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(side.labelAr, color = if (sel) MasalikEmerald else MasalikIvory, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(side.shortLabelAr, color = if (sel) MasalikEmerald else MasalikMuted, fontFamily = JetBrainsMonoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            }
+                        }
+                    }
+
                     Text("زاوية دوران المقود الذكي (من قفل إلى قفل)", color = MasalikAmberSoft, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(180, 270, 360, 540, 900).forEach { deg ->
+                        listOf(180, 270, 360, 540, 720, 900).forEach { deg ->
                             val sel = sw.rotationRangeDeg == deg
                             Box(
                                 modifier = Modifier
@@ -244,7 +357,7 @@ fun ControlStudioScreen(
                                     .padding(vertical = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("${deg}°", color = if (sel) MasalikObsidian else MasalikIvory, fontFamily = JetBrainsMonoFontFamily, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                                Text("${deg}°", color = if (sel) MasalikObsidian else MasalikIvory, fontFamily = JetBrainsMonoFontFamily, fontWeight = FontWeight.Black, fontSize = 12.sp)
                             }
                         }
                     }
@@ -284,12 +397,15 @@ fun ControlStudioScreen(
                         }
                     }
 
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        ToggleCard("إرجاع المقود تلقائياً للمنتصف", sw.autoCenterEnabled, Modifier.weight(1f)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ToggleCard("إرجاع تلقائي واقعي للمنتصف", sw.autoCenterEnabled, Modifier.weight(1f)) {
                             onUpdateHud(hudSettings.copy(smartWheel = sw.copy(autoCenterEnabled = it)))
                         }
-                        ToggleCard("مساعد ثبات المسار في المنعطفات", sw.steeringAssist, Modifier.weight(1f)) {
+                        ToggleCard("مساعد ثبات المنعطفات", sw.steeringAssist, Modifier.weight(1f)) {
                             onUpdateHud(hudSettings.copy(smartWheel = sw.copy(steeringAssist = it)))
+                        }
+                        ToggleCard("اهتزاز لمسي (Haptics)", sw.hapticFeedback, Modifier.weight(1f)) {
+                            onUpdateHud(hudSettings.copy(smartWheel = sw.copy(hapticFeedback = it)))
                         }
                     }
                 }
@@ -313,7 +429,11 @@ fun ControlStudioScreen(
                                                     buttonScale = preset.scale,
                                                     hudOpacity = preset.opacity,
                                                     mirrorControls = preset.mirror,
-                                                    smartWheel = SmartWheelSettings(rotationRangeDeg = preset.wheelDeg)
+                                                    smartWheel = hudSettings.smartWheel.copy(
+                                                        rotationRangeDeg = preset.wheelDeg,
+                                                        wheelStyle = preset.wheelStyle,
+                                                        seatSide = preset.seatSide
+                                                    )
                                                 )
                                             )
                                         }
@@ -328,6 +448,7 @@ fun ControlStudioScreen(
                     }
                 }
             }
+            Spacer(Modifier.height(10.dp))
         }
     }
 }
@@ -335,7 +456,7 @@ fun ControlStudioScreen(
 @Composable
 private fun StudioTabChip(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     active: Boolean,
     modifier: Modifier,
     onClick: () -> Unit
@@ -363,11 +484,11 @@ private fun ToggleCard(label: String, checked: Boolean, modifier: Modifier, onCh
             .clip(RoundedCornerShape(14.dp))
             .background(MasalikCard)
             .border(1.dp, MasalikBorder, RoundedCornerShape(14.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, color = MasalikIvory, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = MasalikIvory, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         Switch(
             checked = checked,
             onCheckedChange = onChanged,

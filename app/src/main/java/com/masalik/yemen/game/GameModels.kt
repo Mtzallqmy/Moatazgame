@@ -40,13 +40,14 @@ enum class SurfaceType(val labelAr: String) {
 }
 
 @Serializable
-enum class CameraMode(val labelAr: String) {
-    CHASE_NEAR("قريبة"),
-    CHASE_FAR("بعيدة"),
-    COCKPIT("المقصورة 3D"),
-    HOOD("غطاء المحرك"),
-    CINEMATIC_FRONT("أمامية"),
-    FREE_PHOTO("حرة 360°")
+enum class CameraMode(val labelAr: String, val subtitleAr: String = "") {
+    CHASE_NEAR("تتبع قريب", "منظور الشخص الثالث الرياضي"),
+    COCKPIT("المقصورة 3D", "قيادة واقعية من داخل المقصورة"),
+    HOOD("غطاء المحرك", "منظور منخفض فوق غطاء المحرك"),
+    CINEMATIC_ORBIT("مداري 360°", "منظور سينمائي قابل للدوران باللمس"),
+    CHASE_FAR("تتبع واسع", "منظور بانورامي بعيد للطريق"),
+    CINEMATIC_FRONT("أمامية", "لقطة سينمائية لمقدمة المركبة"),
+    FREE_PHOTO("حرة 360°", "زاوية تصوير حرة")
 }
 
 @Serializable
@@ -110,6 +111,54 @@ enum class TouchControlMode(val labelAr: String) {
 }
 
 @Serializable
+enum class SteeringWheelStyle(
+    val labelAr: String,
+    val shortLabelAr: String,
+    val descAr: String,
+    val defaultLockDeg: Int,
+    val steeringRatio: Float,
+    val returnSpeed: Float
+) {
+    GULF_YEMENI(
+        "شرقي / خليجي فاخر",
+        "شرقي 4×4",
+        "خشب فاخر وجلد مطرّز بدوران ناعم ومريح للطرق الجبلية والمدن",
+        720, 0.96f, 3.1f
+    ),
+    EUROPEAN_LUXURY(
+        "أوروبي فاخر (D-Cut)",
+        "أوروبي",
+        "مقود رياضي مقطوع من الأسفل مع مبدّلات غيار ودقة ألمانية حادة",
+        540, 1.15f, 4.4f
+    ),
+    JAPANESE_SPORT(
+        "ياباني رياضي / درفت",
+        "رياضي JDM",
+        "قماش ألكانتارا وشريط علوي واستجابة فورية للمنعطفات والانجراف",
+        360, 1.28f, 5.4f
+    ),
+    CLASSIC_HERITAGE(
+        "كلاسيكي خشب وكروم",
+        "كلاسيكي",
+        "مقود خشب جوز لامع وأذرع كروم بإحساس قيادة أصيل وهادئ",
+        900, 0.88f, 2.5f
+    )
+}
+
+@Serializable
+enum class DriverSeatSide(val labelAr: String, val shortLabelAr: String) {
+    LEFT_HAND("مقود يسار (خليجي / أوروبي)", "يسار LHD"),
+    RIGHT_HAND("مقود يمين (شرقي / ياباني)", "يمين RHD")
+}
+
+@Serializable
+enum class HeadlightBeamMode(val labelAr: String) {
+    OFF("مطفأة"),
+    LOW_BEAM("واطي"),
+    HIGH_BEAM("عالي LED")
+}
+
+@Serializable
 enum class TrafficSignalPhase(val labelAr: String) {
     RED("توقف — أحمر"),
     YELLOW("استعد — أصفر"),
@@ -123,6 +172,14 @@ enum class PhotoColorFilter(val labelAr: String) {
     WARM_COPPER("نحاسي"),
     HIGHLAND_MIST("ضبابي"),
     MONOCHROME("أبيض وأسود")
+}
+
+@Serializable
+enum class ReplayCameraAngle(val labelAr: String) {
+    DRONE_ORBIT("درون طائرة 360°"),
+    LOW_CHASE("تتبع رياضي منخفض"),
+    TRACKSIDE("كاميرا المنعطف الثابتة"),
+    COCKPIT("داخل المقصورة 3D")
 }
 
 @Serializable
@@ -195,11 +252,14 @@ enum class GameModeCategory(val labelAr: String) {
 
 @Serializable
 data class SmartWheelSettings(
-    val rotationRangeDeg: Int = 270,
-    val sensitivity: Float = 1.0f,
+    val rotationRangeDeg: Int = 540,
+    val sensitivity: Float = 1.05f,
     val autoCenterEnabled: Boolean = true,
-    val deadZoneDeg: Float = 3.0f,
-    val steeringAssist: Boolean = true
+    val deadZoneDeg: Float = 2.5f,
+    val steeringAssist: Boolean = true,
+    val wheelStyle: SteeringWheelStyle = SteeringWheelStyle.EUROPEAN_LUXURY,
+    val seatSide: DriverSeatSide = DriverSeatSide.LEFT_HAND,
+    val hapticFeedback: Boolean = true
 )
 
 @Serializable
@@ -217,6 +277,7 @@ data class HudCustomizationSettings(
     val buttonScale: Float = 1.0f,
     val hudOpacity: Float = 0.92f,
     val showMinimap: Boolean = true,
+    val rearMirrorEnabled: Boolean = true,
     val smartWheel: SmartWheelSettings = SmartWheelSettings(),
     val widgets: Map<HudWidgetId, HudWidgetLayout> = HudWidgetId.entries.associateWith { HudWidgetLayout() }
 )
@@ -336,7 +397,9 @@ data class VehicleTelemetry(
     val diffLockActive: Boolean = false,
     val engineRunning: Boolean = true,
     val headlightsOn: Boolean = false,
+    val headlightBeamMode: HeadlightBeamMode = HeadlightBeamMode.OFF,
     val wipersOn: Boolean = false,
+    val wiperPhaseRad: Float = 0f,
     val leftIndicatorOn: Boolean = false,
     val rightIndicatorOn: Boolean = false,
     val cruiseControlEnabled: Boolean = false,
@@ -347,6 +410,9 @@ data class VehicleTelemetry(
     val handbrake: Boolean = false,
     val steeringInputNorm: Float = 0f,
     val steeringWheelAngleDeg: Float = 0f,
+    val driftSlipAngleDeg: Float = 0f,
+    val suspensionBounceM: Float = 0f,
+    val roadCurvatureRadPerM: Float = 0f,
     val altitudeM: Float = 1420f,
     val pitchDeg: Float = 0f,
     val rollDeg: Float = 0f,
@@ -379,7 +445,10 @@ data class VehicleTelemetry(
     val frontSteerRad: Float = 0f,
     val activeTrafficCount: Int = 26,
     val activePedestriansCount: Int = 74,
-    val trafficViolationWarningAr: String? = null
+    val trafficViolationWarningAr: String? = null,
+    val tireScreechIntensity: Float = 0f,
+    val turboBoostPsi: Float = 0f,
+    val exhaustPopIntensity: Float = 0f
 )
 
 data class RoadSample(
@@ -397,6 +466,9 @@ data class RoadSample(
     val regionNameAr: String,
     val chunkId: Int,
     val isUrbanStreet: Boolean,
+    val isModernBoulevard: Boolean = false,
+    val curvatureRadPerM: Float = 0f,
+    val bankAngleRad: Float = 0f,
     val hasTunnel: Boolean,
     val hasBridge: Boolean
 )
@@ -448,6 +520,28 @@ data class NearbyTrafficSignalInfo(
     val phase: TrafficSignalPhase,
     val secondsRemaining: Int,
     val pedestriansCrossing: Boolean
+)
+
+data class SpeedRadarDef(
+    val id: String,
+    val nameAr: String,
+    val distanceM: Float,
+    val speedLimitKmh: Int
+)
+
+data class RadarAlertInfo(
+    val id: String,
+    val nameAr: String,
+    val distanceAheadM: Float,
+    val speedLimitKmh: Int
+)
+
+data class RoundaboutDef(
+    val id: String,
+    val nameAr: String,
+    val distanceM: Float,
+    val radiusM: Float,
+    val monumentStyle: Int // 0=fountain/arch, 1=palm_obelisk, 2=heritage_tower
 )
 
 data class StoryChapter(

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">مَسَالِك — دروب اليمن</string>
+    <string name="app_name">مَسَالِك</string>
     <string name="app_subtitle">محاكاة قيادة يمنية ثلاثية الأبعاد</string>
     <string name="start_driving">انطلق للقيادة الآن</string>
     <string name="yemen_map">خريطة مدن اليمن</string>

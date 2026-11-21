@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,21 +29,26 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.Highlight
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -51,7 +57,10 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,22 +69,35 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.masalik.yemen.game.AutomaticShifterState
+import com.masalik.yemen.game.CameraMode
+import com.masalik.yemen.game.HeadlightBeamMode
+import com.masalik.yemen.game.HudWidgetId
 import com.masalik.yemen.game.PhotoColorFilter
 import com.masalik.yemen.game.RoadSplineNetwork
+import com.masalik.yemen.game.TimeOfDayPreset
 import com.masalik.yemen.game.TrafficSignalPhase
+import com.masalik.yemen.game.VehicleTelemetry
 import com.masalik.yemen.game.WeatherPreset
 import com.masalik.yemen.ui.ActiveModal
 import com.masalik.yemen.ui.MasalikGameViewModel
 import com.masalik.yemen.ui.MasalikUiState
+import com.masalik.yemen.ui.components.RealisticDashboardCluster
 import com.masalik.yemen.ui.components.SteeringControlWidget
 import com.masalik.yemen.ui.theme.ChakraPetchFontFamily
 import com.masalik.yemen.ui.theme.JetBrainsMonoFontFamily
@@ -89,22 +111,30 @@ import com.masalik.yemen.ui.theme.MasalikMuted
 import com.masalik.yemen.ui.theme.MasalikObsidian
 import com.masalik.yemen.ui.theme.MasalikSky
 import com.masalik.yemen.ui.theme.MasalikSlate
+import kotlinx.coroutines.delay
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 @Composable
 fun DrivingHudOverlay(
     state: MasalikUiState,
-    vm: MasalikGameViewModel
+    vm: MasalikGameViewModel,
+    onCaptureScreenshot: () -> Unit = {}
 ) {
     val t = state.telemetry
     val hud = state.saveState.hudSettings
+    val haptics = LocalHapticFeedback.current
     var toolsDrawerOpen by remember { mutableStateOf(false) }
+    var cameraPickerOpen by remember { mutableStateOf(false) }
     var minimapExpanded by remember { mutableStateOf(false) }
-    var gasPressed by remember { mutableStateOf(false) }
-    var brakePressed by remember { mutableStateOf(false) }
+    var gasLevel by remember { mutableFloatStateOf(0f) }
+    var brakeLevel by remember { mutableFloatStateOf(0f) }
     var handbrakeOn by remember { mutableStateOf(false) }
 
-    // Photo mode color filter tint
     val filterOverlayColor = when (state.photoFilter) {
         PhotoColorFilter.NATURAL -> Color.Transparent
         PhotoColorFilter.GOLDEN_HOUR -> Color(0x28F59E0B)
@@ -113,36 +143,93 @@ fun DrivingHudOverlay(
         PhotoColorFilter.MONOCHROME -> Color(0x42111827)
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(filterOverlayColor)
-            .windowInsetsPadding(WindowInsets.safeDrawing)
-            .padding(horizontal = 12.dp, vertical = 8.dp)
-    ) {
-        // Photo mode minimal UI
-        if (state.activeModal == ActiveModal.PHOTO) {
-            PhotoModeOverlay(
-                state = state,
-                onOrbit = { vm.orbitShowroom(it) },
-                onFilter = { vm.setPhotoFilter(it) },
-                onFov = { vm.setPhotoFov(it) },
-                onClose = { vm.setModal(ActiveModal.DRIVING) }
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Live 360° Touch-Drag Orbit Surface for Cinematic Third-Person Orbit View (sits behind HUD buttons & pedals)
+        if ((state.cameraMode == CameraMode.CINEMATIC_ORBIT || state.cameraMode == CameraMode.FREE_PHOTO) &&
+            state.activeModal == ActiveModal.DRIVING
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(state.cameraMode) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            var lastX = down.position.x
+                            var lastY = down.position.y
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val c = ev.changes.firstOrNull { it.id == down.id }
+                                if (c == null || !c.pressed) break
+                                if (!c.isConsumed) {
+                                    val dx = c.position.x - lastX
+                                    val dy = c.position.y - lastY
+                                    lastX = c.position.x
+                                    lastY = c.position.y
+                                    if (state.cameraMode == CameraMode.CINEMATIC_ORBIT) {
+                                        vm.orbitDrivingCamera(dx * 0.0085f, dy * 0.0055f)
+                                    } else {
+                                        vm.orbitShowroom(dx * 0.009f)
+                                    }
+                                    c.consume()
+                                }
+                            }
+                        }
+                    }
             )
-            return@Box
         }
 
-        // Clean Cinematic Mode Toggle Button (always visible)
+        // Cockpit 3D Windshield Raindrops + Live Wiper Sweeping Layer (under HUD controls)
+        val isRaining = state.saveState.weather == WeatherPreset.LIGHT_RAIN || state.saveState.weather == WeatherPreset.HEAVY_RAIN
+        if (state.cameraMode == CameraMode.COCKPIT && isRaining && state.activeModal == ActiveModal.DRIVING) {
+            CockpitRainOverlay(
+                heavyRain = state.saveState.weather == WeatherPreset.HEAVY_RAIN,
+                wipersOn = t.wipersOn,
+                wiperPhaseRad = t.wiperPhaseRad,
+                speedKmh = t.speedKmh
+            )
+        }
+
+        // Speed Radar (ساهر) Strobe White Camera Flash Overlay
+        if (state.radarFlashAlpha > 0.01f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = (state.radarFlashAlpha * 0.85f).coerceIn(0f, 0.85f)))
+            )
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(filterOverlayColor)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            // Photo mode minimal UI
+            if (state.activeModal == ActiveModal.PHOTO) {
+                PhotoModeOverlay(
+                    state = state,
+                    onOrbit = { vm.orbitShowroom(it) },
+                    onFilter = { vm.setPhotoFilter(it) },
+                    onFov = { vm.setPhotoFov(it) },
+                    onCaptureScreenshot = onCaptureScreenshot,
+                    onClose = { vm.setModal(ActiveModal.DRIVING) }
+                )
+                return@Box
+            }
+
+        // Clean Cinematic Mode Toggle Button
         if (state.cleanCinematicHud) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .size(48.dp)
                     .clip(CircleShape)
-                    .background(MasalikObsidian.copy(alpha = 0.72f))
-                    .border(1.dp, MasalikAmber, CircleShape)
+                    .background(MasalikObsidian.copy(alpha = 0.76f))
+                    .border(1.2.dp, MasalikAmber, CircleShape)
                     .clickable { vm.toggleCleanHud() }
-                    .padding(10.dp)
-                    .testTag("restore_hud_button")
+                    .testTag("restore_hud_button"),
+                contentAlignment = Alignment.Center
             ) {
                 Icon(Icons.Default.Visibility, contentDescription = "إظهار لوحة القيادة", tint = MasalikAmber)
             }
@@ -157,19 +244,58 @@ fun DrivingHudOverlay(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Top
         ) {
-            // Top Right (RTL Start): Pause, Camera, Map, Tools, Clean HUD + Mission Card
+            // Top Right (RTL Start): Pause, Camera, Quick Day/Night, Headlights, Wheel Style, Map, Tools
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     HudIconPill(Icons.Default.Pause, "إيقاف مؤقت", "hud_pause_button") { vm.setModal(ActiveModal.PAUSE) }
                     HudTextPill(state.cameraMode.labelAr, Icons.Default.CameraAlt, "hud_camera_button") { vm.cycleCameraMode() }
+
+                    // 1-Tap Day / Sunset / Night Cycle Pill
+                    val timeIcon = when (state.activeTimePhase) {
+                        TimeOfDayPreset.NIGHT -> Icons.Default.NightsStay
+                        TimeOfDayPreset.SUNSET, TimeOfDayPreset.DAWN, TimeOfDayPreset.SUNRISE -> Icons.Default.WbTwilight
+                        else -> Icons.Default.WbSunny
+                    }
+                    HudTextPill(
+                        label = state.activeTimePhase.labelAr,
+                        icon = timeIcon,
+                        tag = "hud_day_night_button",
+                        accentTint = if (state.activeTimePhase == TimeOfDayPreset.NIGHT) MasalikSky else MasalikAmber
+                    ) { vm.cycleQuickDayNight() }
+
+                    // 1-Tap 3-Stage Headlights Pill (OFF -> LOW -> HIGH LED)
+                    val beamTint = when (t.headlightBeamMode) {
+                        HeadlightBeamMode.HIGH_BEAM -> MasalikSky
+                        HeadlightBeamMode.LOW_BEAM -> MasalikAmber
+                        HeadlightBeamMode.OFF -> MasalikMuted
+                    }
+                    HudIconPill(
+                        icon = Icons.Default.Highlight,
+                        desc = "المصابيح الأمامية: ${t.headlightBeamMode.labelAr}",
+                        tag = "hud_headlights_button",
+                        active = t.headlightBeamMode != HeadlightBeamMode.OFF,
+                        activeColor = beamTint
+                    ) { vm.toggleHeadlights() }
+
+                    // 1-Tap Steering Style Switcher Pill (Gulf / European / JDM / Classic)
+                    HudTextPill(
+                        label = hud.smartWheel.wheelStyle.shortLabelAr,
+                        icon = Icons.Default.DirectionsCar,
+                        tag = "hud_wheel_style_button"
+                    ) { vm.cycleSteeringWheelStyle() }
+
                     HudIconPill(Icons.Default.Map, "خريطة اليمن", "hud_map_button") { vm.setModal(ActiveModal.WORLD_MAP) }
                     HudIconPill(Icons.Default.Radio, "الراديو اليمني", "hud_radio_button", active = state.saveState.radioSettings.isPlaying) { vm.toggleRadioOpen() }
+                    HudIconPill(Icons.Default.SlowMotionVideo, "إعادة سينمائية 20ث", "hud_replay_button") { vm.enterReplayMode() }
                     HudIconPill(Icons.Default.PhotoCamera, "وضع التصوير", "hud_photo_button") { vm.setModal(ActiveModal.PHOTO) }
                     HudIconPill(Icons.Default.Tune, "أدوات المركبة", "hud_tools_button", active = toolsDrawerOpen) { toolsDrawerOpen = !toolsDrawerOpen }
                     HudIconPill(Icons.Default.VisibilityOff, "إخفاء الواجهة", "hud_clean_button") { vm.toggleCleanHud() }
                 }
 
-                // Active Mission Card
+                // Active Mission Progress Card
                 state.activeMission?.let { mission ->
                     val progress = ((t.distanceAlongRoadM - mission.startDistanceM) /
                         (mission.finishDistanceM - mission.startDistanceM).coerceAtLeast(10f)).coerceIn(0f, 1f)
@@ -177,10 +303,10 @@ fun DrivingHudOverlay(
                     Column(
                         modifier = Modifier
                             .clip(RoundedCornerShape(12.dp))
-                            .background(MasalikObsidian.copy(alpha = 0.84f))
+                            .background(MasalikObsidian.copy(alpha = 0.85f))
                             .border(1.dp, MasalikAmber.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
                             .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .width(235.dp)
+                            .width(240.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(mission.titleAr, color = MasalikAmberSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
@@ -204,22 +330,22 @@ fun DrivingHudOverlay(
                 }
             }
 
-            // Top Center: Region, 24h Clock, Live Traffic Signal Alert & Violations
+            // Top Center: Region, Live 24h Clock, Altitude, Traffic Signal & Service Prompts
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row(
                     modifier = Modifier
                         .clip(RoundedCornerShape(14.dp))
                         .background(MasalikObsidian.copy(alpha = 0.84f))
                         .border(1.dp, MasalikBorder, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                        .padding(horizontal = 11.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    Text(t.regionNameAr, color = MasalikIvory, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(t.regionNameAr, color = MasalikIvory, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Text("·", color = MasalikMuted)
-                    Text("${state.displayClockStr} (${state.activeTimePhase.labelAr})", color = MasalikAmberSoft, fontFamily = JetBrainsMonoFontFamily, fontSize = 11.sp)
+                    Text(state.displayClockStr, color = MasalikAmberSoft, fontFamily = JetBrainsMonoFontFamily, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Text("·", color = MasalikMuted)
-                    Text("${t.altitudeM.roundToInt()}م", color = MasalikSky, fontFamily = JetBrainsMonoFontFamily, fontSize = 11.sp)
+                    Text("${t.altitudeM.roundToInt()}م", color = MasalikSky, fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp)
                     Text("·", color = MasalikMuted)
                     Text("${state.fps} FPS", color = MasalikEmerald, fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp)
                 }
@@ -236,11 +362,11 @@ fun DrivingHudOverlay(
                             .clip(RoundedCornerShape(12.dp))
                             .background(MasalikObsidian.copy(alpha = 0.90f))
                             .border(1.5.dp, sigColor, RoundedCornerShape(12.dp))
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                            .padding(horizontal = 11.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
-                        Box(Modifier.size(12.dp).clip(CircleShape).background(sigColor))
+                        Box(Modifier.size(11.dp).clip(CircleShape).background(sigColor))
                         Text(
                             "${sig.nameAr} (${sig.distanceAheadM.roundToInt()}م) · ${sig.phase.labelAr} (${sig.secondsRemaining}ث)",
                             color = MasalikIvory,
@@ -250,6 +376,43 @@ fun DrivingHudOverlay(
                         if (sig.pedestriansCrossing) {
                             Text("عبور مشاة!", color = MasalikAmber, fontSize = 11.sp, fontWeight = FontWeight.Black)
                         }
+                    }
+                }
+
+                // Speed Radar (رادار ساهر) Upcoming Speed Limit Sign Alert
+                state.nearbyRadar?.let { rad ->
+                    val overspeed = t.speedKmh > rad.speedLimitKmh + 4f
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MasalikObsidian.copy(alpha = 0.92f))
+                            .border(1.5.dp, if (overspeed) MasalikCrimson else MasalikAmber, RoundedCornerShape(14.dp))
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Color.White)
+                                .border(3.dp, MasalikCrimson, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "${rad.speedLimitKmh}",
+                                color = Color.Black,
+                                fontFamily = ChakraPetchFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Text(
+                            "${rad.nameAr} (${rad.distanceAheadM.roundToInt()}م) ${if (overspeed) "· خفف السرعة!" else "· رصد آلي"}",
+                            color = if (overspeed) MasalikCrimson else MasalikAmberSoft,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Black
+                        )
                     }
                 }
 
@@ -302,24 +465,30 @@ fun DrivingHudOverlay(
             }
         }
 
-        // ==================== EXPANDABLE VEHICLE TOOLS DRAWER ====================
+        // ==================== EXPANDABLE VEHICLE & COCKPIT TOOLS DRAWER ====================
         if (toolsDrawerOpen) {
             Column(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(top = 12.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(MasalikObsidian.copy(alpha = 0.92f))
-                    .border(1.dp, MasalikAmber.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                    .background(MasalikObsidian.copy(alpha = 0.94f))
+                    .border(1.dp, MasalikAmber.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
                     .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text("أنظمة المركبة والطقس", color = MasalikAmberSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("أنظمة المركبة والمقصورة", color = MasalikAmberSoft, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ToolChip("مصابيح", t.headlightsOn) { vm.toggleHeadlights() }
+                    ToolChip("مصابيح: ${t.headlightBeamMode.labelAr}", t.headlightsOn) { vm.toggleHeadlights() }
                     ToolChip("مسّاحات", t.wipersOn) { vm.toggleWipers() }
                     ToolChip("إشارة يمين", t.rightIndicatorOn) { vm.toggleRightIndicator() }
                     ToolChip("إشارة يسار", t.leftIndicatorOn) { vm.toggleLeftIndicator() }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ToolChip("مقود: ${hud.smartWheel.seatSide.shortLabelAr}", true) { vm.toggleDriverSeatSide() }
+                    ToolChip("طراز: ${hud.smartWheel.wheelStyle.shortLabelAr}", true) { vm.cycleSteeringWheelStyle() }
+                    ToolChip("مرآة خلفية", hud.rearMirrorEnabled) { vm.toggleRearMirror() }
+                    ToolChip("الوقت: ${state.activeTimePhase.labelAr}", false) { vm.cycleQuickDayNight() }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     ToolChip("دفع ${t.drivetrainMode.label}", true) { vm.cycleDrivetrain() }
@@ -336,7 +505,7 @@ fun DrivingHudOverlay(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     ToolChip("إعادة للطريق", false) { vm.recoverVehicleOnRoad() }
                     ToolChip("قير ${if (t.transmissionMode == "auto") "تلقائي" else "يدوي"}", t.transmissionMode == "manual") { vm.toggleTransmissionMode() }
-                    ToolChip("تغيير الطقس", false) {
+                    ToolChip("الطقس: ${state.saveState.weather.labelAr}", false) {
                         val all = WeatherPreset.entries
                         vm.setWeather(all[(all.indexOf(state.saveState.weather) + 1) % all.size])
                     }
@@ -344,23 +513,49 @@ fun DrivingHudOverlay(
             }
         }
 
-        // ==================== BOTTOM DRIVING CONTROLS ====================
-        val steerWidget = hud.widgets[com.masalik.yemen.game.HudWidgetId.STEERING]
-        val pedalWidget = hud.widgets[com.masalik.yemen.game.HudWidgetId.PEDALS]
+        // ==================== DEDICATED CAMERA TOGGLE & VIEW SWITCHER ====================
+        CameraViewSwitcherPanel(
+            currentMode = state.cameraMode,
+            expanded = cameraPickerOpen,
+            onQuickToggle = {
+                if (hud.smartWheel.hapticFeedback) {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+                vm.toggleImmersiveCameraView()
+            },
+            onToggleExpand = { cameraPickerOpen = !cameraPickerOpen },
+            onSelectMode = { mode ->
+                if (hud.smartWheel.hapticFeedback) {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+                vm.setCameraMode(mode)
+                cameraPickerOpen = false
+            },
+            onResetOrbit = { vm.resetDrivingOrbitCamera() },
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(bottom = 44.dp)
+        )
 
-        // Left side physically (in RTL: Alignment.BottomEnd) — Steering Wheel + Horn
+        // ==================== BOTTOM DRIVING CONTROLS ====================
+        val steerWidget = hud.widgets[HudWidgetId.STEERING]
+        val pedalWidget = hud.widgets[HudWidgetId.PEDALS]
+        val steerAlignment = if (hud.mirrorControls) Alignment.BottomStart else Alignment.BottomEnd
+        val pedalAlignment = if (hud.mirrorControls) Alignment.BottomEnd else Alignment.BottomStart
+
+        // Steering Group (Physically Left by default; swaps when mirrored)
         Row(
-            modifier = Modifier.align(Alignment.BottomEnd),
+            modifier = Modifier.align(steerAlignment),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Horn button
+            // Tactile Horn Button
             Box(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(MasalikObsidian.copy(alpha = 0.82f))
-                    .border(1.5.dp, MasalikAmber.copy(alpha = 0.7f), CircleShape)
+                    .background(MasalikObsidian.copy(alpha = 0.85f))
+                    .border(1.5.dp, MasalikAmber.copy(alpha = 0.72f), CircleShape)
                     .testTag("horn_button")
                     .pointerInput(Unit) {
                         awaitEachGesture {
@@ -383,143 +578,69 @@ fun DrivingHudOverlay(
                 controlMode = hud.controlMode,
                 settings = hud.smartWheel,
                 currentWheelDeg = t.steeringWheelAngleDeg,
+                speedKmh = t.speedKmh,
                 scale = steerWidget?.scale ?: hud.buttonScale,
                 opacity = steerWidget?.opacity ?: hud.hudOpacity,
                 onSteerChanged = { vm.inputSteerNorm = it },
-                onCalibrateGyro = { vm.gyroController.calibrateCenter() }
+                onCalibrateGyro = { vm.gyroController.calibrateCenter() },
+                onShiftUp = { vm.manualGearUp() },
+                onShiftDown = { vm.manualGearDown() }
             )
         }
 
-        // Center Bottom — Digital Speedometer, RPM bar, Gear, Fuel & Surface Telemetry
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .clip(RoundedCornerShape(18.dp))
-                .background(MasalikObsidian.copy(alpha = 0.86f))
-                .border(1.dp, MasalikBorder, RoundedCornerShape(18.dp))
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "${t.speedKmh.roundToInt()}",
-                        color = MasalikIvory,
-                        fontFamily = ChakraPetchFontFamily,
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text("كم/س", color = MasalikMuted, fontSize = 9.sp)
-                }
+        // Center Bottom — Realistic Hybrid Digital/Analog Speedometer & Tachometer Dashboard
+        RealisticDashboardCluster(
+            telemetry = t,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
 
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MasalikAmber.copy(alpha = 0.20f))
-                        .border(1.dp, MasalikAmber, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text(t.gear, color = MasalikAmber, fontFamily = ChakraPetchFontFamily, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("السطح: ${t.surface.labelAr}", color = MasalikSky, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                    val fuelPct = (t.fuelLiters / t.fuelTankCapacityL.coerceAtLeast(1f)).coerceIn(0f, 1f)
-                    Text(
-                        "الوقود: ${(fuelPct * 100).roundToInt()}% · هيكل: ${t.damage.bodyHealthPct.roundToInt()}%",
-                        color = if (t.lowFuelWarning) MasalikCrimson else MasalikEmerald,
-                        fontSize = 10.sp
-                    )
-                    Text(
-                        "مرور: ${t.activeTrafficCount} · مشاة: ${t.activePedestriansCount}",
-                        color = MasalikMuted,
-                        fontSize = 9.sp
-                    )
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            val rpmFrac = (t.rpm / t.redlineRpm.coerceAtLeast(1000f)).coerceIn(0f, 1f)
-            LinearProgressIndicator(
-                progress = { rpmFrac },
-                modifier = Modifier.width(210.dp).height(5.dp).clip(RoundedCornerShape(4.dp)),
-                color = if (rpmFrac > 0.85f) MasalikCrimson else MasalikAmber,
-                trackColor = MasalikBorder
-            )
-        }
-
-        // Right side physically (in RTL: Alignment.BottomStart) — Shifter + Handbrake + Brake & Gas Pedals
+        // Pedals & Shifter Group (Physically Right by default; swaps when mirrored)
         Row(
             modifier = Modifier
-                .align(Alignment.BottomStart)
+                .align(pedalAlignment)
                 .alpha(pedalWidget?.opacity ?: hud.hudOpacity),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Gas Pedal
-            Box(
-                modifier = Modifier
-                    .size(width = 62.dp, height = 112.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (gasPressed) MasalikEmerald else MasalikObsidian.copy(alpha = 0.84f))
-                    .border(2.dp, MasalikEmerald, RoundedCornerShape(16.dp))
-                    .testTag("gas_pedal")
-                    .pointerInput(Unit) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            gasPressed = true
-                            vm.inputThrottle = 1f
-                            while (true) {
-                                val ev = awaitPointerEvent()
-                                val c = ev.changes.firstOrNull { it.id == down.id }
-                                if (c == null || !c.pressed) {
-                                    gasPressed = false
-                                    vm.inputThrottle = 0f
-                                    break
-                                }
-                                c.consume()
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("بنزين", color = if (gasPressed) MasalikObsidian else MasalikEmerald, fontWeight = FontWeight.Black, fontSize = 13.sp)
-                    Text("GAS", color = if (gasPressed) MasalikObsidian else MasalikMuted, fontFamily = JetBrainsMonoFontFamily, fontSize = 9.sp)
-                }
-            }
+            val pedalScale = (pedalWidget?.scale ?: hud.buttonScale).coerceIn(0.85f, 1.3f)
 
-            // Brake Pedal
-            Box(
-                modifier = Modifier
-                    .size(width = 58.dp, height = 84.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (brakePressed) MasalikCrimson else MasalikObsidian.copy(alpha = 0.84f))
-                    .border(2.dp, MasalikCrimson, RoundedCornerShape(16.dp))
-                    .testTag("brake_pedal")
-                    .pointerInput(Unit) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            brakePressed = true
-                            vm.inputBrake = 1f
-                            while (true) {
-                                val ev = awaitPointerEvent()
-                                val c = ev.changes.firstOrNull { it.id == down.id }
-                                if (c == null || !c.pressed) {
-                                    brakePressed = false
-                                    vm.inputBrake = 0f
-                                    break
-                                }
-                                c.consume()
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("فرامل", color = if (brakePressed) Color.White else MasalikCrimson, fontWeight = FontWeight.Black, fontSize = 12.sp)
-                    Text("BRAKE", color = if (brakePressed) Color.White else MasalikMuted, fontFamily = JetBrainsMonoFontFamily, fontSize = 9.sp)
+            // Progressive Analog Gas Pedal (Vertical slide modulates 28%..100% throttle!)
+            AnalogAluminumPedal(
+                titleAr = "بنزين",
+                codeEn = "GAS",
+                level = gasLevel,
+                accentColor = MasalikEmerald,
+                width = (62f * pedalScale).dp,
+                height = (118f * pedalScale).dp,
+                tag = "gas_pedal",
+                hapticEnabled = hud.smartWheel.hapticFeedback,
+                onLevelChanged = { lv ->
+                    if (lv > 0f && gasLevel == 0f && hud.smartWheel.hapticFeedback) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                    gasLevel = lv
+                    vm.inputThrottle = lv
                 }
-            }
+            )
+
+            // Progressive Analog Brake Pedal (Vertical slide modulates 30%..100% braking!)
+            AnalogAluminumPedal(
+                titleAr = "فرامل",
+                codeEn = "BRAKE",
+                level = brakeLevel,
+                accentColor = MasalikCrimson,
+                width = (58f * pedalScale).dp,
+                height = (88f * pedalScale).dp,
+                tag = "brake_pedal",
+                hapticEnabled = hud.smartWheel.hapticFeedback,
+                onLevelChanged = { lv ->
+                    if (lv > 0f && brakeLevel == 0f && hud.smartWheel.hapticFeedback) {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                    brakeLevel = lv
+                    vm.inputBrake = lv
+                }
+            )
 
             // P/R/N/D Shifter + Handbrake column
             Column(verticalArrangement = Arrangement.spacedBy(5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -529,11 +650,14 @@ fun DrivingHudOverlay(
                             val selected = t.autoShifter == st
                             Box(
                                 modifier = Modifier
-                                    .size(30.dp)
+                                    .size(32.dp)
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (selected) MasalikAmber else MasalikObsidian.copy(alpha = 0.84f))
+                                    .background(if (selected) MasalikAmber else MasalikObsidian.copy(alpha = 0.86f))
                                     .border(1.dp, if (selected) MasalikAmberSoft else MasalikBorder, RoundedCornerShape(8.dp))
-                                    .clickable { vm.setShifter(st) }
+                                    .clickable {
+                                        if (hud.smartWheel.hapticFeedback) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        vm.setShifter(st)
+                                    }
                                     .testTag("shifter_${st.name.lowercase()}"),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -544,20 +668,21 @@ fun DrivingHudOverlay(
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         ToolChip("غيار +", false) { vm.manualGearUp() }
-                        ToolChip("غيار -", false) { vm.manualGearDown() }
+                        ToolChip("غيار −", false) { vm.manualGearDown() }
                     }
                 }
 
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(10.dp))
-                        .background(if (handbrakeOn) MasalikCrimson else MasalikObsidian.copy(alpha = 0.84f))
-                        .border(1.5.dp, if (handbrakeOn) Color.White else MasalikCrimson.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                        .background(if (handbrakeOn) MasalikCrimson else MasalikObsidian.copy(alpha = 0.86f))
+                        .border(1.5.dp, if (handbrakeOn) Color.White else MasalikCrimson.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
                         .clickable {
                             handbrakeOn = !handbrakeOn
                             vm.inputHandbrake = handbrakeOn
+                            if (hud.smartWheel.hapticFeedback) haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         }
-                        .padding(horizontal = 12.dp, vertical = 7.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                         .testTag("handbrake_toggle"),
                     contentAlignment = Alignment.Center
                 ) {
@@ -571,7 +696,7 @@ fun DrivingHudOverlay(
             Row(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 62.dp)
+                    .padding(top = 60.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(MasalikObsidian.copy(alpha = 0.94f))
                     .border(1.5.dp, MasalikAmber, RoundedCornerShape(14.dp))
@@ -590,7 +715,7 @@ fun DrivingHudOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MasalikObsidian.copy(alpha = 0.82f)),
+                    .background(MasalikObsidian.copy(alpha = 0.84f)),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -598,7 +723,7 @@ fun DrivingHudOverlay(
                         .width(340.dp)
                         .clip(RoundedCornerShape(22.dp))
                         .background(MasalikSlate)
-                        .border(1.dp, MasalikAmber.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
+                        .border(1.dp, MasalikAmber.copy(alpha = 0.55f), RoundedCornerShape(22.dp))
                         .padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -606,7 +731,7 @@ fun DrivingHudOverlay(
                     Text("إيقاف مؤقت — مَسَالِك", color = MasalikAmberSoft, fontSize = 20.sp, fontWeight = FontWeight.Black)
                     Button(
                         onClick = { vm.setModal(ActiveModal.DRIVING) },
-                        modifier = Modifier.fillMaxWidth().height(46.dp).testTag("resume_button"),
+                        modifier = Modifier.fillMaxWidth().height(48.dp).testTag("resume_button"),
                         colors = ButtonDefaults.buttonColors(containerColor = MasalikAmber, contentColor = MasalikObsidian),
                         shape = RoundedCornerShape(14.dp)
                     ) {
@@ -623,10 +748,226 @@ fun DrivingHudOverlay(
                         PauseActionChip("التحكم", Icons.Default.Tune, Modifier.weight(1f)) { vm.setModal(ActiveModal.CONTROL_STUDIO) }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PauseActionChip("إعادة 20ث", Icons.Default.SlowMotionVideo, Modifier.weight(1f)) { vm.enterReplayMode() }
                         PauseActionChip("الإعدادات", Icons.Default.Settings, Modifier.weight(1f)) { vm.setModal(ActiveModal.SETTINGS) }
-                        PauseActionChip("القائمة الرئيسية", Icons.Default.Home, Modifier.weight(1f)) { vm.setModal(ActiveModal.MENU) }
+                        PauseActionChip("الرئيسية", Icons.Default.Home, Modifier.weight(1f)) { vm.setModal(ActiveModal.MENU) }
                     }
                 }
+            }
+        }
+        }
+    }
+}
+
+/**
+ * Progressive CNC-Aluminum Gas/Brake Pedal:
+ * Touching and sliding upward modulates pedal pressure smoothly from 30% to 100%,
+ * giving realistic city-cruising modulation as well as full-throttle highway launches.
+ */
+@Composable
+private fun AnalogAluminumPedal(
+    titleAr: String,
+    codeEn: String,
+    level: Float,
+    accentColor: Color,
+    width: Dp,
+    height: Dp,
+    tag: String,
+    hapticEnabled: Boolean,
+    onLevelChanged: (Float) -> Unit
+) {
+    val active = level > 0.01f
+    Box(
+        modifier = Modifier
+            .size(width = width, height = height)
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color(0xE81C2434), Color(0xF00B101A))
+                )
+            )
+            .border(
+                width = if (active) 2.2.dp else 1.5.dp,
+                color = if (active) accentColor else accentColor.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .testTag(tag)
+            .pointerInput(hapticEnabled) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    fun calcLevel(yPx: Float): Float {
+                        val fracFromBottom = (1f - (yPx / size.height.coerceAtLeast(1))).coerceIn(0f, 1f)
+                        return (0.35f + fracFromBottom * 0.65f).coerceIn(0.35f, 1f)
+                    }
+                    onLevelChanged(calcLevel(down.position.y))
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val c = ev.changes.firstOrNull { it.id == down.id }
+                        if (c == null || !c.pressed) {
+                            onLevelChanged(0f)
+                            break
+                        }
+                        onLevelChanged(calcLevel(c.position.y))
+                        c.consume()
+                    }
+                }
+            }
+    ) {
+        // Live upward pressure glow fill bar
+        if (active) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .fillMaxHeight(level.coerceIn(0.15f, 1f))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(accentColor.copy(alpha = 0.78f), accentColor.copy(alpha = 0.36f))
+                        )
+                    )
+            )
+        }
+
+        // Machined aluminum anti-slip traction grooves
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val grooves = 5
+            for (i in 1..grooves) {
+                val y = size.height * (0.16f + i * 0.13f)
+                drawLine(
+                    color = if (active) Color(0x55FFFFFF) else Color(0x30CBD5E1),
+                    start = Offset(size.width * 0.22f, y),
+                    end = Offset(size.width * 0.78f, y),
+                    strokeWidth = 2.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = titleAr,
+                color = if (active) Color.White else accentColor,
+                fontWeight = FontWeight.Black,
+                fontSize = 12.sp
+            )
+            Text(
+                text = if (active) "${(level * 100).roundToInt()}%" else codeEn,
+                color = if (active) Color.White else MasalikMuted,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+
+
+@Composable
+private fun CockpitRainOverlay(
+    heavyRain: Boolean,
+    wipersOn: Boolean,
+    wiperPhaseRad: Float,
+    speedKmh: Float
+) {
+    var animTick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(33L)
+            animTick++
+        }
+    }
+    val dropCount = if (heavyRain) 62 else 36
+    val seeds = remember(dropCount) {
+        List(dropCount) { i ->
+            val h1 = ((i * 73856093) xor 0x5A17) and 0xFFFF
+            val h2 = ((i * 19349663) xor 0x2B91) and 0xFFFF
+            val h3 = ((i * 83492791) xor 0x1E3D) and 0xFFFF
+            Triple((h1 % 1000) / 1000f, (h2 % 1000) / 1000f, 0.55f + (h3 % 100) / 120f)
+        }
+    }
+
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        val tSec = animTick * 0.033f
+        val speedStretch = 1f + (speedKmh / 95f).coerceIn(0f, 1.8f)
+
+        // Two wiper pivot points along lower windshield edge
+        val p1 = Offset(w * 0.30f, h * 0.96f)
+        val p2 = Offset(w * 0.68f, h * 0.96f)
+        val bladeLen = h * 0.72f
+        val sweepNorm = if (wipersOn) (0.5f + 0.5f * sin(wiperPhaseRad)) else 0.05f
+        val bladeAngle = (-PI * 0.86 + sweepNorm * PI * 0.66).toFloat()
+
+        for ((sx, sy, sz) in seeds) {
+            val dx = sx * w
+            val dy = ((sy + tSec * (0.14f * sz * speedStretch)) % 1.0f) * h
+
+            // Check if this raindrop sits inside the freshly-wiped arc when wipers are running
+            var wipedClear = false
+            if (wipersOn) {
+                for (pivot in listOf(p1, p2)) {
+                    val vx = dx - pivot.x
+                    val vy = dy - pivot.y
+                    val dist = kotlin.math.hypot(vx.toDouble(), vy.toDouble()).toFloat()
+                    if (dist < bladeLen && dy < pivot.y) {
+                        val ang = atan2(vy.toDouble(), vx.toDouble()).toFloat()
+                        if (abs(ang - bladeAngle) < 0.38f) {
+                            wipedClear = true
+                            break
+                        }
+                    }
+                }
+            }
+            if (wipedClear) continue
+
+            val radius = (2.2f + sz * 2.6f).dp.toPx()
+            val streakLen = radius * (2.0f + speedStretch * 1.8f)
+            // Translucent water bead + bright specular highlight
+            drawLine(
+                color = Color(0x55CBE7FF),
+                start = Offset(dx, dy - streakLen),
+                end = Offset(dx, dy),
+                strokeWidth = radius * 0.95f,
+                cap = StrokeCap.Round
+            )
+            drawCircle(
+                color = Color(0x88E8F6FF),
+                radius = radius * 0.78f,
+                center = Offset(dx, dy)
+            )
+            drawCircle(
+                color = Color(0xCCFFFFFF),
+                radius = radius * 0.28f,
+                center = Offset(dx - radius * 0.22f, dy - radius * 0.22f)
+            )
+        }
+
+        // Draw animated realistic rubber windshield wiper blades when active
+        if (wipersOn) {
+            for (pivot in listOf(p1, p2)) {
+                val tip = Offset(
+                    pivot.x + cos(bladeAngle) * bladeLen,
+                    pivot.y + sin(bladeAngle) * bladeLen
+                )
+                drawLine(
+                    color = Color(0xD90E131D),
+                    start = pivot,
+                    end = tip,
+                    strokeWidth = 6.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = Color(0x6694A3B8),
+                    start = pivot,
+                    end = tip,
+                    strokeWidth = 1.6.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
             }
         }
     }
@@ -638,6 +979,7 @@ private fun PhotoModeOverlay(
     onOrbit: (Float) -> Unit,
     onFilter: (PhotoColorFilter) -> Unit,
     onFov: (Float) -> Unit,
+    onCaptureScreenshot: () -> Unit,
     onClose: () -> Unit
 ) {
     Box(
@@ -681,7 +1023,8 @@ private fun PhotoModeOverlay(
                 modifier = Modifier.width(100.dp),
                 colors = SliderDefaults.colors(thumbColor = MasalikAmber, activeTrackColor = MasalikAmber)
             )
-            ToolChip("عودة", true, onClose)
+            ToolChip("حفظ HD", true, onCaptureScreenshot)
+            ToolChip("عودة", false, onClose)
         }
     }
 }
@@ -730,18 +1073,19 @@ private fun GpsMinimapCard(distanceM: Float, expanded: Boolean, onToggleExpand: 
 
 @Composable
 private fun HudIconPill(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     desc: String,
     tag: String,
     active: Boolean = false,
+    activeColor: Color = MasalikAmber,
     onClick: () -> Unit
 ) {
     Box(
         modifier = Modifier
             .size(38.dp)
             .clip(RoundedCornerShape(11.dp))
-            .background(if (active) MasalikAmber else MasalikObsidian.copy(alpha = 0.84f))
-            .border(1.dp, if (active) MasalikAmberSoft else MasalikBorder, RoundedCornerShape(11.dp))
+            .background(if (active) activeColor else MasalikObsidian.copy(alpha = 0.84f))
+            .border(1.dp, if (active) Color.White.copy(alpha = 0.7f) else MasalikBorder, RoundedCornerShape(11.dp))
             .clickable(onClick = onClick)
             .testTag(tag),
         contentAlignment = Alignment.Center
@@ -753,8 +1097,9 @@ private fun HudIconPill(
 @Composable
 private fun HudTextPill(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     tag: String,
+    accentTint: Color = MasalikAmber,
     onClick: () -> Unit
 ) {
     Row(
@@ -764,13 +1109,13 @@ private fun HudTextPill(
             .background(MasalikObsidian.copy(alpha = 0.84f))
             .border(1.dp, MasalikBorder, RoundedCornerShape(11.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp)
+            .padding(horizontal = 9.dp)
             .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Icon(icon, contentDescription = label, tint = MasalikAmber, modifier = Modifier.size(16.dp))
-        Text(label, color = MasalikIvory, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Icon(icon, contentDescription = label, tint = accentTint, modifier = Modifier.size(15.dp))
+        Text(label, color = MasalikIvory, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -789,9 +1134,176 @@ private fun ToolChip(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+private fun CameraViewSwitcherPanel(
+    currentMode: CameraMode,
+    expanded: Boolean,
+    onQuickToggle: () -> Unit,
+    onToggleExpand: () -> Unit,
+    onSelectMode: (CameraMode) -> Unit,
+    onResetOrbit: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val activeIcon = when (currentMode) {
+        CameraMode.CINEMATIC_ORBIT, CameraMode.FREE_PHOTO -> Icons.Default.Autorenew
+        CameraMode.COCKPIT -> Icons.Default.DirectionsCar
+        else -> Icons.Default.Videocam
+    }
+    val selectableModes = remember {
+        listOf(
+            CameraMode.COCKPIT,
+            CameraMode.HOOD,
+            CameraMode.CINEMATIC_ORBIT,
+            CameraMode.CHASE_NEAR,
+            CameraMode.CHASE_FAR,
+            CameraMode.CINEMATIC_FRONT
+        )
+    }
+
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Expandable Direct View Selector Drawer
+            if (expanded) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MasalikObsidian.copy(alpha = 0.92f))
+                        .border(1.2.dp, MasalikAmber.copy(alpha = 0.65f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    selectableModes.forEach { mode ->
+                        val selected = currentMode == mode
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (selected) MasalikAmber else MasalikSlate)
+                                .border(
+                                    1.dp,
+                                    if (selected) MasalikAmberSoft else MasalikBorder,
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .clickable { onSelectMode(mode) }
+                                .padding(horizontal = 9.dp, vertical = 8.dp)
+                                .testTag("camera_mode_${mode.name.lowercase()}")
+                        ) {
+                            Text(
+                                text = mode.labelAr,
+                                color = if (selected) MasalikObsidian else MasalikIvory,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Secondary Expand/Collapse All-Views Button (48dp touch target)
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(if (expanded) MasalikAmber else MasalikObsidian.copy(alpha = 0.86f))
+                    .border(
+                        1.2.dp,
+                        if (expanded) Color.White.copy(alpha = 0.7f) else MasalikBorder,
+                        RoundedCornerShape(14.dp)
+                    )
+                    .clickable(onClick = onToggleExpand)
+                    .testTag("camera_picker_toggle_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CameraAlt,
+                    contentDescription = "قائمة زوايا الكاميرا",
+                    tint = if (expanded) MasalikObsidian else MasalikAmberSoft,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // Primary Camera Toggle Button: 1-tap switches between Cockpit, Hood, and Cinematic 360° Orbit!
+            Row(
+                modifier = Modifier
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(MasalikObsidian.copy(alpha = 0.92f), MasalikSlate.copy(alpha = 0.94f))
+                        )
+                    )
+                    .border(1.5.dp, MasalikAmber, RoundedCornerShape(14.dp))
+                    .clickable(onClick = onQuickToggle)
+                    .padding(horizontal = 12.dp)
+                    .testTag("camera_toggle_button"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
+            ) {
+                Icon(
+                    imageVector = activeIcon,
+                    contentDescription = "تبديل منظور الكاميرا",
+                    tint = MasalikAmber,
+                    modifier = Modifier.size(20.dp)
+                )
+                Column {
+                    Text(
+                        text = currentMode.labelAr,
+                        color = MasalikIvory,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        lineHeight = 12.sp
+                    )
+                    Text(
+                        text = "تبديل الكاميرا",
+                        color = MasalikAmberSoft,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = 10.sp
+                    )
+                }
+            }
+        }
+
+        // Live 360° Orbit Controls Pill when Cinematic Orbit view is active
+        if (currentMode == CameraMode.CINEMATIC_ORBIT) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MasalikObsidian.copy(alpha = 0.86f))
+                    .border(1.dp, MasalikSky.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                    .clickable(onClick = onResetOrbit)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .testTag("reset_orbit_camera_button"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "إعادة زاوية المدار",
+                    tint = MasalikSky,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = "اسحب للدوران 360° · إعادة الزاوية",
+                    color = MasalikSky,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun PauseActionChip(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     modifier: Modifier,
     onClick: () -> Unit
 ) {

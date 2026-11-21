@@ -27,10 +27,13 @@ import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -50,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import com.masalik.yemen.game.MissionsCatalog
 import com.masalik.yemen.game.RoadSplineNetwork
 import com.masalik.yemen.game.SaveGameSchema
+import com.masalik.yemen.game.TimeOfDayPreset
 import com.masalik.yemen.game.VehicleFleetCatalog
 import com.masalik.yemen.ui.theme.JetBrainsMonoFontFamily
 import com.masalik.yemen.ui.theme.MasalikAmber
@@ -64,7 +68,9 @@ import com.masalik.yemen.ui.theme.MasalikSky
 @Composable
 fun MainMenuLobbyScreen(
     saveState: SaveGameSchema,
+    activeTimePhase: TimeOfDayPreset,
     onStartDriving: () -> Unit,
+    onCycleDayNight: () -> Unit,
     onOpenWorldMap: () -> Unit,
     onOpenMissions: () -> Unit,
     onOpenGarage: () -> Unit,
@@ -75,6 +81,13 @@ fun MainMenuLobbyScreen(
     val rank = MissionsCatalog.getDriverRank(saveState.driverXp)
     val vehicle = VehicleFleetCatalog.specOf(saveState.selectedVehicleId)
     val completedMissions = saveState.missionCompletions.values.count { it > 0 }
+    val wheelCfg = saveState.hudSettings.smartWheel
+
+    val timeIcon = when (activeTimePhase) {
+        TimeOfDayPreset.NIGHT -> Icons.Default.NightsStay
+        TimeOfDayPreset.SUNSET, TimeOfDayPreset.DAWN, TimeOfDayPreset.SUNRISE -> Icons.Default.WbTwilight
+        else -> Icons.Default.WbSunny
+    }
 
     Box(
         modifier = Modifier
@@ -83,8 +96,8 @@ fun MainMenuLobbyScreen(
                 Brush.horizontalGradient(
                     colors = listOf(
                         MasalikObsidian.copy(alpha = 0.88f),
-                        MasalikObsidian.copy(alpha = 0.48f),
-                        MasalikObsidian.copy(alpha = 0.14f)
+                        MasalikObsidian.copy(alpha = 0.44f),
+                        MasalikObsidian.copy(alpha = 0.12f)
                     )
                 )
             )
@@ -126,32 +139,63 @@ fun MainMenuLobbyScreen(
                     fontSize = 12.sp
                 )
                 Text("·", color = MasalikMuted)
-                Text("Room SQLite محلي 100%", color = MasalikEmerald, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("100% محلي", color = MasalikEmerald, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
 
+            // Right Controls: Quick Live Day/Night Showroom Switcher + Yemeni Radio
             Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(if (saveState.radioSettings.isPlaying) MasalikAmber else MasalikObsidian.copy(alpha = 0.86f))
-                    .border(1.dp, if (saveState.radioSettings.isPlaying) MasalikAmberSoft else MasalikBorder, RoundedCornerShape(16.dp))
-                    .clickable(onClick = onToggleRadio)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .testTag("lobby_radio_toggle"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.Radio,
-                    contentDescription = "راديو Lo-Fi اليمني",
-                    tint = if (saveState.radioSettings.isPlaying) MasalikObsidian else MasalikAmber,
-                    modifier = Modifier.size(16.dp)
-                )
-                Text(
-                    text = if (saveState.radioSettings.isPlaying) "راديو Lo-Fi يمني يعمل" else "راديو Lo-Fi يمني",
-                    color = if (saveState.radioSettings.isPlaying) MasalikObsidian else MasalikIvory,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MasalikObsidian.copy(alpha = 0.86f))
+                        .border(1.dp, if (activeTimePhase == TimeOfDayPreset.NIGHT) MasalikSky else MasalikAmber.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                        .clickable(onClick = onCycleDayNight)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("lobby_day_night_toggle"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        timeIcon,
+                        contentDescription = "تبديل إضاءة النهار والليل",
+                        tint = if (activeTimePhase == TimeOfDayPreset.NIGHT) MasalikSky else MasalikAmber,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "إضاءة: ${activeTimePhase.labelAr}",
+                        color = MasalikIvory,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (saveState.radioSettings.isPlaying) MasalikAmber else MasalikObsidian.copy(alpha = 0.86f))
+                        .border(1.dp, if (saveState.radioSettings.isPlaying) MasalikAmberSoft else MasalikBorder, RoundedCornerShape(16.dp))
+                        .clickable(onClick = onToggleRadio)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("lobby_radio_toggle"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Radio,
+                        contentDescription = "راديو Lo-Fi اليمني",
+                        tint = if (saveState.radioSettings.isPlaying) MasalikObsidian else MasalikAmber,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = if (saveState.radioSettings.isPlaying) "الراديو يعمل" else "راديو يمني",
+                        color = if (saveState.radioSettings.isPlaying) MasalikObsidian else MasalikIvory,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
@@ -159,14 +203,14 @@ fun MainMenuLobbyScreen(
         Column(
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .widthIn(max = 390.dp)
+                .widthIn(max = 395.dp)
                 .fillMaxHeight()
                 .padding(top = 46.dp, bottom = 22.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                "MASALIK · NATIVE ANDROID 3D · 100% OFFLINE",
+                "MASALIK · 3D YEMEN DRIVING SIM",
                 color = MasalikAmber,
                 fontFamily = JetBrainsMonoFontFamily,
                 fontSize = 10.sp,
@@ -178,35 +222,35 @@ fun MainMenuLobbyScreen(
                 color = MasalikIvory
             )
             Text(
-                "دروب ومدن اليمن المفتوحة",
+                "محاكاة قيادة واقعية — مدن وجبال اليمن",
                 color = MasalikAmberSoft,
-                fontSize = 16.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(5.dp))
             Text(
-                "محاكاة قيادة واقعية عبر 22 كم من تعز ونقيل سمارة وإب وصنعاء القديمة ومأرب وعدن وشبام — بشوارع حقيقية وسكان ومرور ذكي.",
+                "بوليفاردات حديثة وأبراج زجاجية إلى جانب تعز وإب وصنعاء القديمة وعدن وشبام — بإضاءة ليلية حقيقية ودركسون شرقي وأوروبي.",
                 color = MasalikMuted,
                 fontSize = 11.sp,
                 lineHeight = 16.sp
             )
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(9.dp))
 
-            // Active vehicle card
+            // Active vehicle + cockpit steering card
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
-                    .background(MasalikObsidian.copy(alpha = 0.85f))
+                    .background(MasalikObsidian.copy(alpha = 0.86f))
                     .border(1.dp, MasalikBorder, RoundedCornerShape(14.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("المركبة الجاهزة للانطلاق", color = MasalikMuted, fontSize = 10.sp)
                     Text("${vehicle.nameAr} · ${vehicle.categoryAr}", color = MasalikIvory, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("الدركسون: ${wheelCfg.wheelStyle.shortLabelAr} (${wheelCfg.seatSide.shortLabelAr})", color = MasalikSky, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text("${vehicle.maxPowerHp} HP", color = MasalikAmber, fontFamily = JetBrainsMonoFontFamily, fontWeight = FontWeight.Bold, fontSize = 13.sp)
@@ -266,8 +310,8 @@ fun MainMenuLobbyScreen(
                     modifier = Modifier.weight(1f)
                 )
                 LobbyNavCard(
-                    title = "استوديو التحكم",
-                    subtitle = "المقود، الدواسات والجيروسكوب",
+                    title = "استوديو الدركسون",
+                    subtitle = "شرقي · أوروبي · رياضي · RHD/LHD",
                     icon = Icons.Default.Tune,
                     accent = Color(0xFFFB7185),
                     tag = "lobby_control_studio_button",
@@ -304,7 +348,7 @@ fun MainMenuLobbyScreen(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text("برمجة وتطوير معتز العلقمي – تعز – اليمن – 2026م", color = MasalikMuted, fontSize = 10.sp)
-            Text("OPENGLES 3.0 · ROOM SQLITE · 100% OFFLINE", color = MasalikMuted, fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp)
+            Text("مَسَالِك · OPENGLES 3.0 PBR · ROOM SQLITE", color = MasalikMuted, fontFamily = JetBrainsMonoFontFamily, fontSize = 10.sp)
         }
     }
 }

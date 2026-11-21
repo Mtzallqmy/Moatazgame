@@ -9,15 +9,23 @@ object VehicleFleetCatalog {
 
     val YEMENI_PAINT_SWATCHES: List<YemeniPaintSwatch> = listOf(
         YemeniPaintSwatch("نحاسي صبر", "#C87236"),
-        YemeniPaintSwatch("لؤلؤي صنعاء", "#EAE6DC"),
-        YemeniPaintSwatch("رمال مأرب", "#D4B475"),
-        YemeniPaintSwatch("أخضر إب", "#1F6F50"),
-        YemeniPaintSwatch("أزرق عدن", "#1E5B94"),
-        YemeniPaintSwatch("قرمزي باب اليمن", "#A62626"),
-        YemeniPaintSwatch("بازلت تعز", "#27303D"),
-        YemeniPaintSwatch("ذهبي شبام", "#D99B26"),
-        YemeniPaintSwatch("فضي جبلي", "#94A3B8"),
-        YemeniPaintSwatch("أصفر أجرة يمني", "#EAB308")
+        YemeniPaintSwatch("لؤلؤي صنعاء", "#F2EFE9"),
+        YemeniPaintSwatch("رمال مأرب", "#D9B878"),
+        YemeniPaintSwatch("أخضر إب الزمردي", "#16835C"),
+        YemeniPaintSwatch("أزرق عدن الكهربائي", "#196AD4"),
+        YemeniPaintSwatch("قرمزي رياضي", "#D6242C"),
+        YemeniPaintSwatch("أوبسيديان ليلي", "#1D2430"),
+        YemeniPaintSwatch("ذهبي شبام", "#E5A31E"),
+        YemeniPaintSwatch("فضي تيتانيوم", "#A4B2C2"),
+        YemeniPaintSwatch("أصفر سباق", "#F5C414"),
+        YemeniPaintSwatch("تركواز سقطرى", "#0E9AA7"),
+        YemeniPaintSwatch("برتقالي بركاني", "#EA580C"),
+        YemeniPaintSwatch("عنابي ملكي", "#7C1830"),
+        YemeniPaintSwatch("بنفسجي سماء ليل", "#5B21B6"),
+        YemeniPaintSwatch("رمادي ناردو", "#64748B"),
+        YemeniPaintSwatch("أخضر عسكري", "#3F5E45"),
+        YemeniPaintSwatch("أزرق سماوي معدني", "#0284C7"),
+        YemeniPaintSwatch("برونزي صحراوي", "#8C5A32")
     )
 
     val YEMENI_LICENSE_PLATES: List<String> = listOf(
